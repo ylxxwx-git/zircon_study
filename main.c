@@ -37,8 +37,7 @@ void sleep(int cycles) {
  */
 void c_entry() {
     // The core functionality: print the message
-    int loop = 1000;
-    
+   
     int core_id = get_core_id();
     
     if (core_id != 0) {
