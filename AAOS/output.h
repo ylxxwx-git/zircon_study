@@ -6,5 +6,6 @@
 void putc(char c);
 void puts(const char *s);
 void puthex(unsigned long n);
+char getc();
 
 #endif

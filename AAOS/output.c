@@ -12,6 +12,7 @@
 
 // Flag Register constant: Transmitter FIFO Full (UART can't accept more data yet)
 #define UART_FR_TXFF (1 << 5)
+#define UART_FR_RXFE (1 << 4)
 
 
 /**
@@ -48,4 +49,11 @@ void puthex(unsigned long n) {
         int d = (n >> i) & 0xF;
         putc(d > 9 ? 'A' + d - 10 : '0' + d);
     }
+}
+
+char getc() {
+    while (UART0_FR & UART_FR_RXFE) {
+        // Spin lock: wait until ready
+    }
+    return UART0_DR;
 }

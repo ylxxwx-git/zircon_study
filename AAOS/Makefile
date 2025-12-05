@@ -9,7 +9,7 @@ CC = $(CROSS_COMPILE)gcc
 LD = $(CROSS_COMPILE)ld
 
 # Source files
-C_SOURCES = main.c output.c
+C_SOURCES = main.c output.c utils.c
 ASM_SOURCES = startup.S
 
 # Object files
