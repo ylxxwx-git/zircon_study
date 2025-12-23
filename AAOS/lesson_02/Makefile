@@ -7,9 +7,10 @@
 CROSS_COMPILE = aarch64-linux-gnu-
 CC = $(CROSS_COMPILE)gcc
 LD = $(CROSS_COMPILE)ld
+OBJCOPY = $(CROSS_COMPILE)objcopy
 
 # Source files
-C_SOURCES = main.c output.c utils.c
+C_SOURCES = main.c output.c utils.c mutex.c handlers.c syscalls.c
 ASM_SOURCES = startup.S
 
 # Object files
@@ -51,15 +52,19 @@ $(TARGET): $(OBJS)
 	@echo "Assembling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(TARGET).bin: $(TARGET)
+	@echo "Generating binary $@..."
+	$(OBJCOPY) -O binary $< $@
+
 # Rule to run the kernel in QEMU
 # -M virt: Emulate the standard AArch64 virtual machine
 # -cpu cortex-a53: Select the specific CPU model
 # -kernel $(TARGET): Load our built kernel image
 # -nographic -serial mon:stdio: Redirect the virtual serial port output to the host console
-run: $(TARGET)
+run: $(TARGET) $(TARGET).bin
 	@echo "Running kernel in QEMU..."
-	qemu-system-aarch64 -M virt -cpu cortex-a53 -smp 4 -kernel $(TARGET) -nographic -serial mon:stdio
+	qemu-system-aarch64 -M virt -cpu cortex-a53 -smp 4 -kernel $(TARGET).bin -nographic -serial mon:stdio
 
 clean:
 	@echo "Cleaning up..."
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(OBJS) $(TARGET) $(TARGET).bin

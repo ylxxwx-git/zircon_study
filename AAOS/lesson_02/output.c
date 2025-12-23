@@ -1,3 +1,7 @@
+#include "output.h"
+#include "mutex.h"
+#include "utils.h"
+
 // Define the base address of the PL011 UART for the QEMU 'virt' machine
 // This is a fixed address QEMU maps to the virtual serial port.
 #define UART0_BASE 0x09000000
@@ -14,6 +18,7 @@
 #define UART_FR_TXFF (1 << 5)
 #define UART_FR_RXFE (1 << 4)
 
+static mutex_t uart_mutex;
 
 /**
  * @brief Writes a single character to the serial port.
@@ -34,9 +39,13 @@ void putc(char c) {
  * @param s The string to transmit.
  */
 void puts(const char *s) {
+    // unsigned long flags = local_irq_save();
+    // mutex_lock(&uart_mutex);
     while (*s != '\0') {
         putc(*s++);
     }
+    // mutex_unlock(&uart_mutex);
+    // local_irq_restore(flags);
 }
 
 /**
@@ -44,11 +53,19 @@ void puts(const char *s) {
  * @param n The integer to print.
  */
 void puthex(unsigned long n) {
-    puts("0x");
+    // unsigned long flags = local_irq_save();
+    // mutex_lock(&uart_mutex);
+    // We can't call puts here because it locks again (non-recursive mutex)
+    // So we implement the printing manually or use a helper
+    const char *prefix = "0x";
+    while (*prefix) putc(*prefix++);
+    
     for (int i = 60; i >= 0; i -= 4) {
         int d = (n >> i) & 0xF;
         putc(d > 9 ? 'A' + d - 10 : '0' + d);
     }
+    // mutex_unlock(&uart_mutex);
+    // local_irq_restore(flags);
 }
 
 char getc() {
@@ -57,3 +74,5 @@ char getc() {
     }
     return UART0_DR;
 }
+
+
