@@ -1,9 +1,8 @@
 #include "output.h"
 
 
-int g_boot_el = 0;
-
-static inline void psci_hvc(unsigned long core_id, unsigned long entry_point) {
+// Always use HVC. If we are in EL2, our shim handles it.
+void psci_cpu_on(unsigned long core_id, unsigned long entry_point) {
     register unsigned long r0 asm("x0") = 0xC4000003;
     register unsigned long r1 asm("x1") = core_id;
     register unsigned long r2 asm("x2") = entry_point;
@@ -13,26 +12,6 @@ static inline void psci_hvc(unsigned long core_id, unsigned long entry_point) {
                  : "+r"(r0), "+r"(r1), "+r"(r2), "+r"(r3)
                  :
                  : "memory");
-}
-
-static inline void psci_smc(unsigned long core_id, unsigned long entry_point) {
-    register unsigned long r0 asm("x0") = 0xC4000003;
-    register unsigned long r1 asm("x1") = core_id;
-    register unsigned long r2 asm("x2") = entry_point;
-    register unsigned long r3 asm("x3") = 0;
-    
-    asm volatile("smc #0"
-                 : "+r"(r0), "+r"(r1), "+r"(r2), "+r"(r3)
-                 :
-                 : "memory");
-}
-
-void psci_cpu_on(unsigned long core_id, unsigned long entry_point) {
-    if (g_boot_el == 2) {
-        psci_smc(core_id, entry_point);
-    } else {
-        psci_hvc(core_id, entry_point);
-    }
 }
 
 int get_core_id() {
@@ -83,16 +62,11 @@ void secondary_core_entry() {
     return;
 }
 
-void kernel_main(int boot_el) {
+void kernel_main() {
     // Initialize UART (already done if we use the same output.c, but good to be sure)
     // In lesson_01 output.c, puts calls early_putc which writes to 0x09000000 directly.
     
-    g_boot_el = boot_el;
-
     puts("\n[Lesson 02] Booting...\n");
-    puts("Booted from EL");
-    puthex(boot_el);
-    puts("\n");
     int core_id = get_core_id();
     
     if (core_id != 0) {

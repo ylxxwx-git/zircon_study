@@ -6,7 +6,7 @@ _start:
     mrs x0, CurrentEL
     lsr x0, x0, #2
     and x0, x0, #3
-    mov x19, x0 // Save initial EL in x19
+
 
     cmp x0, #3
     b.eq el3_to_el1
@@ -50,6 +50,10 @@ el2_to_el1:
     mov x0, #(1 << 31)
     // SWIO [1]: 1 = Set VMID to 0 (optional)
     msr hcr_el2, x0
+
+    // Set VBAR_EL2 (Vector Base Address Register)
+    ldr x0, =el2_vector_table
+    msr vbar_el2, x0
     
     // Configure SCTLR_EL1 (System Control Register) - Optional but good practice
     // Little Endian, etc. Reset value is usually unknown.
@@ -98,9 +102,62 @@ bss_loop:
 
 bss_end:
     // 3. Jump to C
-    mov x0, x19      // Pass boot_el as first argument
     bl kernel_main
 
 halt:
     wfi
     b halt
+
+// =============================================================
+// EL2 Exception Vector Table
+// =============================================================
+.align 11 // Vector tables must be aligned to 2KB (2^11)
+el2_vector_table:
+    // Current EL with SP0
+    .align 7; b . // Synchronous
+    .align 7; b . // IRQ
+    .align 7; b . // FIQ
+    .align 7; b . // SError
+
+    // Current EL with SPx
+    .align 7; b . // Synchronous
+    .align 7; b . // IRQ
+    .align 7; b . // FIQ
+    .align 7; b . // SError
+
+    // Lower EL using AArch64 (This is where HVC from EL1 lands)
+    .align 7; b el2_sync_handler // Synchronous
+    .align 7; b . // IRQ
+    .align 7; b . // FIQ
+    .align 7; b . // SError
+
+    // Lower EL using AArch32
+    .align 7; b . // Synchronous
+    .align 7; b . // IRQ
+    .align 7; b . // FIQ
+    .align 7; b . // SError
+
+// =============================================================
+// EL2 Synchronous Exception Handler
+// =============================================================
+el2_sync_handler:
+    // 1. Save x30 (LR) to TPIDR_EL2 (Scratch)
+    msr tpidr_el2, x30
+
+    // 2. Read Exception Syndrome Register (ESR_EL2)
+    mrs x30, esr_el2
+    
+    // 3. Check EC (Exception Class) - Bits [31:26]
+    lsr x30, x30, #26
+    cmp x30, #0x16 // 0x16 = HVC instruction execution in AArch64 state
+    b.ne . // If not HVC, hang (or handle other exceptions)
+    
+    // 4. Forward to EL3 via SMC
+    // Arguments are already in x0-x7, which SMC uses.
+    smc #0
+    
+    // 5. Restore x30
+    mrs x30, tpidr_el2
+    
+    // 6. Return to EL1
+    eret
