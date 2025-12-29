@@ -62,6 +62,15 @@ void c_entry() {
 
     // Loop indefinitely to halt execution
     sleep(1000000);
+    char input[1024];
+    while (1) {
+        // Infinite loop for the master core
+        puts("$: ");
+        gets(input);
+        puts(input);
+        puts("\n");
+        memset(input, 0, 1024);
+    }
 }
 
 void secondary_core_entry() {

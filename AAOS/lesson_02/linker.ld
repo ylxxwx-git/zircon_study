@@ -10,7 +10,6 @@ OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 
 /* Define the base address of the RAM in the QEMU 'virt' machine */
-/* Use the virtual address space */
 BASE_ADDR = 0x40000000;
 
 SECTIONS
@@ -44,7 +43,7 @@ SECTIONS
     _heap_start = .;
 
     /* Define the stack top at 128MB offset from BASE_ADDR */
-    _stack_top = 0x40000000 + 0x08000000;
+    _stack_top = BASE_ADDR + 0x08000000;
 
     /* Discard unwanted sections to keep the image clean */
     /DISCARD/ : {
