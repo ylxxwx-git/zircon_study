@@ -19,7 +19,7 @@ static inline void psci_cpu_on(unsigned long core_id, unsigned long entry_point)
 
 int get_core_id() {
     unsigned long mpidr;
-    asm volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+    asm volatile("mrs %[mpidr], mpidr_el1" : [mpidr] "=r"(mpidr));
     return mpidr & 0xFF; // Extract Affinity Level 0 (core ID)
 }
 extern void _start();
@@ -29,6 +29,17 @@ void sleep(int cycles) {
     while(cycles-- > 0) {
         // Simple delay loop
     }
+}
+
+void init_other_cores() {
+    // Wake up secondary cores using PSCI
+    puts("Waking up secondary cores...\n");
+    psci_cpu_on(1, (unsigned long)_start);
+    sleep(1000000);
+    psci_cpu_on(2, (unsigned long)_start);
+    sleep(1000000);
+    psci_cpu_on(3, (unsigned long)_start);
+    puts("Secondary cores woken!\n");    
 }
 
 /**
@@ -51,14 +62,6 @@ void c_entry() {
 
     puts("Hello World from a 64-bit ARM (AArch64) bare-metal OS!\n");
     
-    // Wake up secondary cores using PSCI
-    puts("Waking up secondary cores...\n");
-    psci_cpu_on(1, (unsigned long)_start);
-    sleep(1000000);
-    psci_cpu_on(2, (unsigned long)_start);
-    sleep(1000000);
-    psci_cpu_on(3, (unsigned long)_start);
-    puts("Secondary cores woken!\n");
 
     // Loop indefinitely to halt execution
     sleep(1000000);
@@ -69,6 +72,10 @@ void c_entry() {
         gets(input);
         puts(input);
         puts("\n");
+
+        if (strncmp(input, "init", 4) == 0) {
+            init_other_cores();
+        }
         memset(input, 0, 1024);
     }
 }
