@@ -1,0 +1,13 @@
+target_sources(${target}
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/_arch_exceptions.s
+        ${CMAKE_CURRENT_SOURCE_DIR}/_arch_thread.s
+        ${CMAKE_CURRENT_SOURCE_DIR}/_relocate.s
+        ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+        ${CMAKE_CURRENT_SOURCE_DIR}/arch_asm.s
+        ${CMAKE_CURRENT_SOURCE_DIR}/arch_cache.s
+        ${CMAKE_CURRENT_SOURCE_DIR}/arch_exceptions.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/arch_mmu.s
+        ${CMAKE_CURRENT_SOURCE_DIR}/arch_thread.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/pmap.c
+)

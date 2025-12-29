@@ -1,0 +1,22 @@
+add_subdirectory(arch)
+add_subdirectory(vm)
+add_subdirectory(proc)
+add_subdirectory(vfs)
+
+target_sources(${target}
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bitmap.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/console.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/devicetree.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/fdt.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/irq.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/kmain.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/kmem_slab.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/kstdio.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/list.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/lock.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/panic.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/rbtree.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/slab.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/spinlock.c
+)
