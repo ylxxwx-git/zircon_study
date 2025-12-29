@@ -57,8 +57,12 @@ $(TARGET): $(OBJS)
 # -kernel $(TARGET): Load our built kernel image
 # -nographic -serial mon:stdio: Redirect the virtual serial port output to the host console
 run: $(TARGET)
-	@echo "Running kernel in QEMU..."
+	@echo "Running kernel in QEMU (EL3 Default)..."
 	qemu-system-aarch64 -M virt -cpu cortex-a53 -smp 4 -kernel $(TARGET) -nographic -serial mon:stdio
+
+run_el2: $(TARGET)
+	@echo "Running kernel in QEMU (EL2 Forced)..."
+	qemu-system-aarch64 -M virt,virtualization=on -cpu cortex-a53 -smp 4 -kernel $(TARGET) -nographic -serial mon:stdio
 
 clean:
 	@echo "Cleaning up..."

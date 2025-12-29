@@ -1,6 +1,7 @@
 // Define the base address of the PL011 UART for the QEMU 'virt' machine
 // This is a fixed address QEMU maps to the virtual serial port.
 #define UART0_BASE 0x09000000
+#include "output.h"
 
 // Register offsets for the PL011 UART (32-bit access assumed)
 
@@ -48,4 +49,42 @@ void puthex(unsigned long n) {
         int d = (n >> i) & 0xF;
         putc(d > 9 ? 'A' + d - 10 : '0' + d);
     }
+}
+
+char getc() {
+    while (UART0_FR & (1 << 4)) {
+        // Wait until the receiver FIFO is NOT empty.
+    }
+    return UART0_DR;
+}
+
+char *gets(char *s) {
+    char *original = s;
+    char c;
+    while (1) {
+        c = getc();
+        if (c == '\r' || c == '\n') {
+            putc('\n'); // Echo newline
+            break;
+        }
+        putc(c); // Echo character
+        *s++ = c;
+    }
+    *s = '\0';
+    return original;
+}
+
+void memset(void *s, int c, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        ((char *)s)[i] = c;
+    }
+}
+
+int strncmp(const char *s1, const char *s2, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (s1[i] != s2[i]) {
+            return s1[i] - s2[i];
+        }
+    }
+    return 0;
 }

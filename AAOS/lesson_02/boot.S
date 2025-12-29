@@ -6,7 +6,8 @@ _start:
     mrs x0, CurrentEL
     lsr x0, x0, #2
     and x0, x0, #3
-    
+    mov x19, x0 // Save initial EL in x19
+
     cmp x0, #3
     b.eq el3_to_el1
     
@@ -16,23 +17,16 @@ _start:
     // If already in EL1, just continue
     b el1_entry
 
+
+
 el3_to_el1:
     // Configure SCR_EL3 (Secure Configuration Register)
     // RW [10]: 1 = Next lower level is AArch64
     // NS [0]:  1 = Non-secure state
     mov x0, #(1 << 10)
+    orr x0, x0, #(1 << 8) // Enable HVC (HCE)
     orr x0, x0, #(1 << 0)
     msr scr_el3, x0
-    
-    // Set SPSR_EL3 (Saved Program Status Register)
-    // M [3:0]: 0101 (EL1h) - Return to EL1 using SP_EL1
-    // DAIF [9:6]: 1111 (Mask all interrupts)
-    ldr x0, =0x3C5
-    msr spsr_el3, x0
-    
-    // Set ELR_EL3 (Exception Link Register) to el1_entry
-    adr x0, el1_entry
-    msr elr_el3, x0
     
     // We also need to configure HCR_EL2 if we are skipping EL2, 
     // but usually EL3->EL2->EL1 is safer. 
@@ -44,7 +38,7 @@ el3_to_el1:
     
     // Redo: EL3 -> EL2
     // Set SPSR_EL3 to EL2h (1001)
-    ldr x0, =0x3C9
+    mov x0, #0x3C9
     msr spsr_el3, x0
     adr x0, el2_to_el1
     msr elr_el3, x0
@@ -104,6 +98,7 @@ bss_loop:
 
 bss_end:
     // 3. Jump to C
+    mov x0, x19      // Pass boot_el as first argument
     bl kernel_main
 
 halt:
