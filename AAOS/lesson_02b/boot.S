@@ -62,15 +62,9 @@ wait_loop:
     eret
 
 
-
-
-
-
 el3_to_el1:
     // Set VBAR_EL3 (Vector Base Address Register)
 
-
-    // Set VBAR_EL3 (Vector Base Address Register)
     ldr x0, =el3_vector_table
     msr vbar_el3, x0
 
@@ -291,7 +285,7 @@ el3_sync_handler:
 // Data Section
 // =============================================================
 .section .data
-.align 3
+.balign 8
 mailbox:
     .skip 8 * 4 // 4 cores, 8 bytes each
 
