@@ -109,6 +109,9 @@ irq_handler:
     // 2. Call C Handler
     bl irq_handler_c
     
+    // 2.5 Check for SoftIRQs (Bottom Halves)
+    bl check_and_run_softirqs
+    
     // 3. Restore Context
     ldp x0, x1, [sp, #16 * 0]
     ldp x2, x3, [sp, #16 * 1]

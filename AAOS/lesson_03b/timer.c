@@ -43,20 +43,35 @@ extern void safe_puthex(uint64_t v);
 extern void lock_uart();
 extern void unlock_uart();
 
+// Per-core pending flags for Bottom Half
+volatile int timer_bh_pending[4] = {0, 0, 0, 0};
+
 void timer_handler(void) {
-    static int counts[4] = {0}; // Per-core counters (naive, assuming max 4 cores)
     int core_id = get_core_id();
     
+    // Top Half: Fast, minimal work
     // 1. Reload Timer
     asm volatile("msr cntp_tval_el0, %0" :: "r"(timer_interval));
     
-    // 2. Print Message every 1000 ticks (approx 1 sec)
-    counts[core_id]++;
-    if (counts[core_id] % 1000 == 0) {
-        lock_uart();
-        puts("Timer Trigger: Core ");
-        puthex(core_id);
-        puts("\n");
-        unlock_uart();
+    // 2. Schedule Bottom Half
+    timer_bh_pending[core_id] = 1;
+}
+
+void timer_bottom_half(void) {
+    int core_id = get_core_id();
+    
+    if (timer_bh_pending[core_id]) {
+        // Clear flag first (or last, depending on re-entrancy needs, here it's simple)
+        timer_bh_pending[core_id] = 0;
+        
+        // Bottom Half: Heavy work (UART output)
+        static int counts[4] = {0};
+        counts[core_id]++;
+        
+        if (counts[core_id] % 1000 == 0) {
+            safe_puts("Timer Bottom Half: Core ");
+            safe_puthex(core_id);
+            safe_puts("\n");
+        }
     }
 }

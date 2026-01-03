@@ -5,5 +5,6 @@
 
 void timer_init(void);
 void timer_handler(void);
+void timer_bottom_half(void);
 
 #endif

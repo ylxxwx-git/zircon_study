@@ -27,31 +27,24 @@ This plan outlines a step-by-step approach to building a basic Operating System 
 
 ## Phase 2: Interrupts & Timing
 
-### Lesson 03: Interrupt Handling (GIC)
-*   **Theory**: Interrupt Controllers (GICv2/v3), IRQ vs FIQ, Vector Tables, Context Saving.
+### Lesson 03: Interrupts & Timers (GIC + Generic Timer)
+*   **Theory**: Interrupt Controllers (GICv2), IRQ vs FIQ, Hardware Timers, Preemption.
 *   **Practice**:
-    *   Initializing the Generic Interrupt Controller (GIC).
-    *   Enabling interrupts in the CPU (`DAIF` bits).
-    *   Handling a basic hardware interrupt.
-*   **Goal**: Successfully catching and handling a hardware interrupt.
-
-### Lesson 04: The System Timer
-*   **Theory**: Hardware Timers, Clock frequencies, Preemption concepts.
-*   **Practice**:
+    *   Initializing the GIC and enabling interrupts.
     *   Configuring the ARM Generic Timer.
-    *   Writing an interrupt handler for the timer.
+    *   Handling IRQs and Timer Interrupts.
 *   **Goal**: A "tick" printed to the screen every second via interrupt.
 
 ## Phase 3: Memory Management
 
-### Lesson 05: Physical Memory Management (PMM)
+### Lesson 04: Physical Memory Management (PMM)
 *   **Theory**: Physical Address Space, Bitmaps, Linked Lists, Buddy Allocators.
 *   **Practice**:
     *   Parsing the memory map (from Device Tree or hardcoded).
     *   Implementing a Page Frame Allocator (allocating 4KB physical pages).
 *   **Goal**: `alloc_page()` and `free_page()` working.
 
-### Lesson 06: Virtual Memory (MMU)
+### Lesson 05: Virtual Memory (MMU)
 *   **Theory**: Virtual vs Physical Addresses, Paging, Translation Lookaside Buffer (TLB), Memory Attributes (Cacheable vs Device).
 *   **Practice**:
     *   Setting up Page Tables (L0 - L3).
@@ -98,4 +91,4 @@ This plan outlines a step-by-step approach to building a basic Operating System 
 
 *   **Lesson 11**: File Systems (Simple Read-Only FS like TarFS).
 *   **Lesson 12**: Fork & Exec (Process Creation).
-*   **Lesson 13**: Shell (Interactive Command Line).
+*   **Lesson 13**: Shell (Interactive Command Line). 

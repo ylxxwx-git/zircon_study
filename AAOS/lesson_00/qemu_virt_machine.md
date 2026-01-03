@@ -14,6 +14,19 @@ When you run QEMU with `-M virt`, it dynamically generates a system with the fol
 *   **PCIe**: Generic PCIe host bridge (ECAM).
 *   **VirtIO**: Support for virtualized devices (network, disk, gpu) via MMIO or PCIe.
 
+## Exception Levels (EL3 & EL2)
+
+By default, QEMU starts the kernel at the highest *non-secure* exception level available.
+*   **Default**: Starts in **EL1** (if no EL2/EL3) or **EL2** (if virtualization is enabled but not secure).
+*   **EL3 (TrustZone)**: To enable EL3, use `secure=on`.
+    *   Example: `-machine virt,secure=on`
+    *   Result: CPU resets in **EL3**.
+*   **EL2 (Virtualization)**: To enable EL2, use `virtualization=on`.
+    *   Example: `-machine virt,virtualization=on`
+    *   Result: CPU resets in **EL2** (if secure=off).
+*   **Both**: `-machine virt,secure=on,virtualization=on`
+    *   Result: CPU resets in **EL3**, and EL2 is available in Non-Secure world.
+
 ## Memory Map
 
 The memory map of the `virt` machine is generally stable, but you should ideally parse the **Device Tree Blob (DTB)** passed in register `x0` at boot to be 100% sure.

@@ -96,6 +96,7 @@ void kernel_main(void) {
 
     // 6. Main Loop
     while (1) {
+        // Wait for interrupt
         asm volatile("wfi");
     }
 }
