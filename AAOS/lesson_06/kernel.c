@@ -24,17 +24,20 @@ void psci_cpu_on(unsigned long core_id, unsigned long entry_point) {
                  : "memory");
 }
 
-extern void lock_mutex(volatile int *lock);
+extern int try_lock_mutex(volatile int *lock);
 extern void unlock_mutex(volatile int *lock);
+
+void lock_mutex(volatile int *lock) {
+    while (try_lock_mutex(lock) == 0) {
+        schedule();
+    }
+}
 
 volatile int gic_ready = 0;
 volatile int uart_lock = 0;
 
 extern void _start();
-
-void sleep(volatile int cycles) {
-    while(cycles-- > 0);
-}
+extern void sleep_ms(uint64_t ms);
 
 void init_other_cores() {
     // Wake up secondary cores using PSCI
@@ -47,8 +50,6 @@ void init_other_cores() {
 }
 
 void lock_uart() {
-    // Spinlocks require MMU to be enabled for exclusive monitors to work reliably on some QEMU versions/configurations.
-    // We will enable them in Lesson 04 (MMU). For now, we accept interleaved output.
     lock_mutex(&uart_lock);
 }
 
@@ -80,12 +81,8 @@ void test_thread() {
     int core_id = get_core_id();
     safe_puts("Test Thread Started\n");
     while (1) {
-        // unsafe_puts("Task 1 Alive\n");
-        // lock_uart();
-        safe_puts("Core "); safe_puthex(core_id); safe_puts(" Thread "); safe_puthex(current->pid); safe_puts(": Running\n");
-        // unlock_uart();
-        sleep(100000);
-        // schedule();
+        safe_puthex(core_id); safe_puts(" Core, Task 1 Running\n");
+        sleep_ms(100);
     }
 }
 
@@ -163,8 +160,8 @@ void kernel_main(uint64_t dtb_ptr32, uint64_t x1, uint64_t x2, uint64_t x3) {
         if (core_id == 0) {
              // safe_puts("Core 0: Idle Loop\n");
         }
-        safe_puts("Core "); safe_puthex(core_id); safe_puts(" Task 0: Running\n");
-        sleep(100000);
+        safe_puthex(core_id); safe_puts(" Core, Task 0: Running\n");
+        sleep_ms(100);
         // schedule();
     }
 }

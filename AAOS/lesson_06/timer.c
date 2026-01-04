@@ -38,6 +38,12 @@ void timer_init(void) {
     gic_enable_interrupt(30);
 }
 
+uint64_t get_timer_freq(void) {
+    uint64_t freq;
+    asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+    return freq;
+}
+
 extern int get_core_id();
 extern void safe_puts(const char *s);
 extern void safe_puthex(uint64_t v);

@@ -1,5 +1,6 @@
 #include "sched.h"
 #include "output.h"
+#include "timer.h"
 
 struct task_struct task[NR_CORES][NR_TASKS_PER_CORE];
 struct task_struct *current_tasks[NR_CORES];
@@ -32,45 +33,51 @@ void init_scheduler(void) {
 
 void schedule(void) {
     int core_id = get_core_id();
-    // unsafe_puts("Schedule Core "); unsafe_puthex(core_id); unsafe_puts("\n");
-    
     struct task_struct *curr = current; 
     
-    // Simple Round Robin within local array
-    struct task_struct *next_task = 0;
-    
-    // Calculate current task index
-    // We can assume curr is within task[core_id] array
-    // But let's be safe and just search
-    
-    int curr_idx = -1;
-    for (int i = 0; i < NR_TASKS_PER_CORE; i++) {
-        if (&task[core_id][i] == curr) {
-            curr_idx = i;
-            break;
+    while (1) {
+        struct task_struct *next_task = 0;
+        int curr_idx = -1;
+        
+        // Find current index
+        for (int i = 0; i < NR_TASKS_PER_CORE; i++) {
+            if (&task[core_id][i] == curr) {
+                curr_idx = i;
+                break;
+            }
         }
-    }
-    
-    if (curr_idx == -1) return; // Should not happen
-    
-    int next_idx = (curr_idx + 1) % NR_TASKS_PER_CORE;
-    
-    // Find next RUNNING task
-    for (int i = 0; i < NR_TASKS_PER_CORE; i++) {
-        int idx = (next_idx + i) % NR_TASKS_PER_CORE;
-        // unsafe_puts("Checking Task "); unsafe_puthex(idx); unsafe_puts(" State "); unsafe_puthex(task[core_id][idx].state); unsafe_puts("\n");
-        if (task[core_id][idx].state == TASK_RUNNING) {
-            next_task = &task[core_id][idx];
-            break;
+        
+        if (curr_idx != -1) {
+            int next_idx = (curr_idx + 1) % NR_TASKS_PER_CORE;
+            // Find next RUNNING task
+            for (int i = 0; i < NR_TASKS_PER_CORE; i++) {
+                int idx = (next_idx + i) % NR_TASKS_PER_CORE;
+                if (task[core_id][idx].state == TASK_RUNNING) {
+                    next_task = &task[core_id][idx];
+                    break;
+                }
+            }
         }
-    }
-    
-    if (next_task && next_task != curr) {
-        // unsafe_puts("Switching from "); unsafe_puthex(curr->pid);
-        // unsafe_puts(" to "); unsafe_puthex(next_task->pid); unsafe_puts("\n");
-        struct task_struct *prev = curr;
-        current_tasks[core_id] = next_task;
-        cpu_switch_to(prev, next_task);
+        
+        if (next_task) {
+            if (next_task != curr) {
+                struct task_struct *prev = curr;
+                current_tasks[core_id] = next_task;
+                cpu_switch_to(prev, next_task);
+            }
+            return;
+        }
+        
+        // No other task found.
+        if (curr->state == TASK_RUNNING) {
+            return; // Continue current
+        }
+        
+        // Current is sleeping/zombie, and no other task.
+        // We MUST wait.
+        asm volatile("msr daifclr, #2"); // Ensure IRQs enabled
+        asm volatile("wfi");
+        // After IRQ (Timer), check again.
     }
 }
 
@@ -109,9 +116,39 @@ int kthread_create(void (*fn)(void)) {
     return p->pid;
 }
 
+void sleep_ms(uint64_t ms) {
+    uint64_t freq = get_timer_freq();
+    uint64_t ticks = (freq * ms) / 1000;
+    uint64_t current_time;
+    asm volatile("mrs %0, cntpct_el0" : "=r"(current_time));
+    
+    current->wake_time = current_time + ticks;
+    current->state = TASK_SLEEPING;
+    schedule();
+}
+
 void timer_tick() {
+    int core_id = get_core_id();
+    uint64_t current_time;
+    asm volatile("mrs %0, cntpct_el0" : "=r"(current_time));
+    
+    // Wake up sleeping tasks
+    for (int i = 0; i < NR_TASKS_PER_CORE; i++) {
+        struct task_struct *p = &task[core_id][i];
+        if (p->state == TASK_SLEEPING && current_time >= p->wake_time) {
+            p->state = TASK_RUNNING;
+        }
+    }
+
     --current->counter;
     // unsafe_puts("Tick "); unsafe_puthex(current->counter); unsafe_puts("\n");
+    
+    // If current is not running, we are likely in the idle loop.
+    // Don't preempt. The idle loop will check for new tasks after we return.
+    if (current->state != TASK_RUNNING) {
+        return;
+    }
+
     if (current->counter > 0 || current->preempt_count > 0) {
         return;
     }

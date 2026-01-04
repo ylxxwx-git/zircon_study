@@ -4,6 +4,7 @@
 #define THREAD_CPU_CONTEXT			0 		// offset of cpu_context in task_struct 
 
 #ifndef __ASSEMBLER__
+#include <stdint.h>
 
 #define THREAD_SIZE				4096
 
@@ -16,6 +17,7 @@
 
 #define TASK_RUNNING				0
 #define TASK_ZOMBIE				1
+#define TASK_SLEEPING               2
 
 struct cpu_context {
 	unsigned long x19;
@@ -43,6 +45,7 @@ struct task_struct {
     unsigned long elr;
     long pid;
     long cpu;
+    uint64_t wake_time;
 };
 
 extern struct task_struct *current_tasks[NR_CORES];

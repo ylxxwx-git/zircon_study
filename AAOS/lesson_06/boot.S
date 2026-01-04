@@ -262,7 +262,7 @@ el1_vector_table:
 // =============================================================
 irq_handler:
     // 1. Save Context
-    sub sp, sp, #256 // Reserve space
+    sub sp, sp, #288 // Reserve space (16 * 10 + 16 for SPSR/ELR + padding)
     stp x0, x1, [sp, #16 * 0]
     stp x2, x3, [sp, #16 * 1]
     stp x4, x5, [sp, #16 * 2]
@@ -274,10 +274,20 @@ irq_handler:
     stp x16, x17, [sp, #16 * 8]
     stp x18, x30, [sp, #16 * 9] // Save LR with x18
     
+    // Save SPSR and ELR
+    mrs x0, spsr_el1
+    mrs x1, elr_el1
+    stp x0, x1, [sp, #16 * 10]
+
     // 2. Call C Handler
     bl irq_handler_c
     
     // 3. Restore Context
+    // Restore SPSR and ELR
+    ldp x0, x1, [sp, #16 * 10]
+    msr spsr_el1, x0
+    msr elr_el1, x1
+
     ldp x0, x1, [sp, #16 * 0]
     ldp x2, x3, [sp, #16 * 1]
     ldp x4, x5, [sp, #16 * 2]
@@ -288,7 +298,7 @@ irq_handler:
     ldp x14, x15, [sp, #16 * 7]
     ldp x16, x17, [sp, #16 * 8]
     ldp x18, x30, [sp, #16 * 9]
-    add sp, sp, #256
+    add sp, sp, #288
     
     // 4. Return
     eret

@@ -6,20 +6,20 @@ get_core_id:
     and x0, x0, #3 // Extract bits [1:0] for Core ID (assuming cluster 0)
     ret
 
-// void lock_mutex(volatile int *lock);
-.globl lock_mutex
-lock_mutex:
+// int try_lock_mutex(volatile int *lock);
+.globl try_lock_mutex
+try_lock_mutex:
     mov w1, #1
-1:  ldaxr w2, [x0]
-    cbnz w2, 2f
+    ldaxr w2, [x0]
+    cbnz w2, 1f
     stlxr w2, w1, [x0]
-    cbnz w2, 1b
+    cbnz w2, 1f
     dmb ish
+    mov w0, #1      // Success
     ret
-2:  wfe
-    ldr w2, [x0]
-    cbnz w2, 2b
-    b 1b
+1:  mov w0, #0      // Failed
+    clrex           // Clear exclusive monitor
+    ret
 
 // void unlock_mutex(volatile int *lock);
 .globl unlock_mutex
