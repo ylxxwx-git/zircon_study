@@ -1,6 +1,7 @@
 #include "timer.h"
 #include "gic.h"
 #include "output.h"
+#include "sched.h"
 
 // Timer Interval (approx 1 second if freq is 62.5MHz, but QEMU might differ)
 // We will read CNTFRQ_EL0 to get the actual frequency.
@@ -14,7 +15,7 @@ void timer_init(void) {
     puthex(freq);
     puts(" Hz\n");
     
-    timer_interval = freq / 1000; // 1 interrupt per millisecond (1000Hz)
+    timer_interval = freq / 10; // 1 interrupt per 100ms (10Hz)
 
     // 2. Set Timer Compare Value
     // We use CNTP_TVAL_EL0 (Timer Value) which is a down-counter from the current time?
@@ -51,10 +52,16 @@ void timer_handler(void) {
     
     // Top Half: Fast, minimal work
     // 1. Reload Timer
-    asm volatile("msr cntp_tval_el0, %0" :: "r"(timer_interval));
+    // Hardcode to approx 100ms (assuming 62.5MHz) -> 6,250,000
+    uint64_t interval = 6250000;
+    if (timer_interval > 0) interval = timer_interval;
+    asm volatile("msr cntp_tval_el0, %0" :: "r"(interval));
     
     // 2. Schedule Bottom Half
     timer_bh_pending[core_id] = 1;
+    
+    // 3. Timer Tick (Preemption)
+    timer_tick();
 }
 
 void timer_bottom_half(void) {
@@ -69,9 +76,9 @@ void timer_bottom_half(void) {
         counts[core_id]++;
         
         if (counts[core_id] % 1000 == 0) {
-            safe_puts("Timer Bottom Half: Core ");
-            safe_puthex(core_id);
-            safe_puts("\n");
+            unsafe_puts("Timer Bottom Half: Core ");
+            unsafe_puthex(core_id);
+            unsafe_puts("\n");
         }
     }
 }
