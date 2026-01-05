@@ -1,0 +1,53 @@
+#include "process.h"
+#include "pmm.h"
+#include "mmu.h"
+#include "output.h"
+#include "tar.h"
+
+// Defined in boot.S
+extern void move_to_user_mode(uint64_t entry_point, uint64_t stack_ptr);
+
+extern char _binary_shell_bin_start[];
+extern char _binary_shell_bin_end[];
+
+void create_user_process(const char *filename) {
+    printf("Creating User Process: %s\n", filename);
+    
+    // Allocate page for user code
+    void *user_page = pmm_alloc_page();
+    if (!user_page) {
+        printf("Failed to allocate user page\n");
+        return;
+    }
+    
+    // Find file in TAR
+    uint64_t sector;
+    uint32_t size;
+    if (tar_find(filename, &sector, &size) != 0) {
+        printf("File not found: %s\n", filename);
+        return;
+    }
+    
+    printf("Loading %s from sector %d (size: %d)\n", filename, sector, size);
+    
+    // Read file content
+    if (tar_read(sector, size, user_page) != 0) {
+        printf("Failed to read file\n");
+        return;
+    }
+    
+    // Flush Cache
+    asm volatile("dc cvau, %0" : : "r"(user_page));
+    asm volatile("dsb ish");
+    asm volatile("ic iallu");
+    asm volatile("isb");
+    
+    // Map the user page
+    uint64_t va_offset = 0xFFFFFFFF40000000;
+    uint64_t user_page_pa = (uint64_t)user_page - va_offset;
+    map_user_page(user_page_pa);
+    
+    printf("Jumping to User Mode at 0x0...\n");
+    // Stack pointer at 0x1000 (end of the 4KB page)
+    move_to_user_mode(0x0, 0x1000); 
+}
