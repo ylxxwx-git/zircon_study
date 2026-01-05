@@ -154,14 +154,9 @@ void kernel_main(uint64_t dtb_ptr32, uint64_t x1, uint64_t x2, uint64_t x3) {
     puts(": Interrupts Enabled!\n");
     unlock_uart();
 
-    // 6. Main Loop
-    
+    // 6. Task 0
     while (1) {
-        if (core_id == 0) {
-             // safe_puts("Core 0: Idle Loop\n");
-        }
-        safe_puthex(core_id); safe_puts(" Core, Task 0: Running\n");
+        safe_puthex(core_id); safe_puts(" Core, Task 0 Running\n");
         sleep_ms(100);
-        // schedule();
     }
 }

@@ -85,6 +85,7 @@ extern void *pmm_alloc_page();
 
 // Create a thread on the CURRENT core
 int kthread_create(void (*fn)(void)) {
+    unsafe_puts("DEBUG: kthread_create called\n");
     int core_id = get_core_id();
     struct task_struct *p = 0;
     
