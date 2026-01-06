@@ -1,7 +1,9 @@
 #include "process.h"
 #include "pmm.h"
 #include "mmu.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "tar.h"
 
 // Defined in boot.S
@@ -11,12 +13,12 @@ extern char _binary_shell_bin_start[];
 extern char _binary_shell_bin_end[];
 
 void create_user_process(const char *filename) {
-    printf("Creating User Process: %s\n", filename);
+    printk("Creating User Process: %s\n", filename);
     
     // Allocate page for user code
     void *user_page = pmm_alloc_page();
     if (!user_page) {
-        printf("Failed to allocate user page\n");
+        printk("Failed to allocate user page\n");
         return;
     }
     
@@ -24,15 +26,15 @@ void create_user_process(const char *filename) {
     uint64_t sector;
     uint32_t size;
     if (tar_find(filename, &sector, &size) != 0) {
-        printf("File not found: %s\n", filename);
+        printk("File not found: %s\n", filename);
         return;
     }
     
-    printf("Loading %s from sector %d (size: %d)\n", filename, sector, size);
+    printk("Loading %s from sector %d (size: %d)\n", filename, sector, size);
     
     // Read file content
     if (tar_read(sector, size, user_page) != 0) {
-        printf("Failed to read file\n");
+        printk("Failed to read file\n");
         return;
     }
     
@@ -47,7 +49,7 @@ void create_user_process(const char *filename) {
     uint64_t user_page_pa = (uint64_t)user_page - va_offset;
     map_user_page(user_page_pa);
     
-    printf("Jumping to User Mode at 0x0...\n");
+    printk("Jumping to User Mode at 0x0...\n");
     // Stack pointer at 0x1000 (end of the 4KB page)
     move_to_user_mode(0x0, 0x1000); 
 }

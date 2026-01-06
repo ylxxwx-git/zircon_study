@@ -1,6 +1,8 @@
 #include "mmu.h"
 #include "mmu.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "pmm.h"
 
 // External helpers
@@ -12,7 +14,7 @@ extern uint64_t get_sctlr_el1(void);
 extern void set_sctlr_el1(uint64_t);
 extern void tlb_invalidate_all(void);
 
-extern void safe_puts(const char *s);
+
 
 // External Page Table from boot.S
 extern uint64_t idmap_table[];
@@ -21,7 +23,7 @@ void mmu_init(void) {
     // We rely on boot.S initialization for now.
     // Re-initializing here might break Higher Half Kernel if we are not careful.
     // For now, just print status.
-    safe_puts("MMU Initialized in boot.S.\n");
+    kputs("MMU Initialized in boot.S.\n");
 }
 
 // Map a single 4KB page at VA 0x0 to PA `pa` for User (EL0)
@@ -70,5 +72,5 @@ void map_user_page(uint64_t pa) {
     // 7. Invalidate TLB
     tlb_invalidate_all();
     
-    safe_puts("Mapped User Page at 0x0\n");
+    kputs("Mapped User Page at 0x0\n");
 }

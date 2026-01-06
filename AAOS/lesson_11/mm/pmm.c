@@ -1,5 +1,7 @@
 #include "pmm.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 
 // Pointer to the bitmap (placed at kernel_end)
 static uint8_t *bitmap = 0;
@@ -15,8 +17,7 @@ static uint64_t align_up(uint64_t val, uint64_t align) {
     return (val + align - 1) & ~(align - 1);
 }
 
-extern void safe_puts(const char *s);
-extern void safe_puthex(uint64_t v);
+
 
 #define VA_OFFSET 0xFFFFFFFF40000000
 
@@ -48,10 +49,10 @@ void pmm_init(uint64_t kernel_end, uint64_t ram_base, uint64_t ram_size) {
     
     mem_start = ram_base; // Physical start of managed memory
     
-    safe_puts("PMM Initialized.\n");
-    safe_puts("Bitmap Address: "); safe_puthex((uint64_t)bitmap); safe_puts("\n");
-    safe_puts("Managed Pages: "); safe_puthex(page_count); safe_puts("\n");
-    safe_puts("Used Pages (Kernel+Bitmap): "); safe_puthex(used_pages); safe_puts("\n");
+    kputs("PMM Initialized.\n");
+    kputs("Bitmap Address: "); kputhex((uint64_t)bitmap); kputs("\n");
+    kputs("Managed Pages: "); kputhex(page_count); kputs("\n");
+    kputs("Used Pages (Kernel+Bitmap): "); kputhex(used_pages); kputs("\n");
 }
 
 void *pmm_alloc_page(void) {

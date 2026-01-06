@@ -1,6 +1,8 @@
 #include "tar.h"
 #include "virtio.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "utils.h"
 #include "pmm.h"
 
@@ -20,43 +22,43 @@ static uint32_t parse_octal(const char *str, int len) {
 }
 
 void tar_init(void) {
-    printf("TAR: Reading sector 0...\n");
+    printk("TAR: Reading sector 0...\n");
     
     // Use dynamic buffer to ensure valid RAM
     void *buffer = pmm_alloc_page();
     if (!buffer) {
-        printf("TAR: OOM\n");
+        printk("TAR: OOM\n");
         return;
     }
     
     // Just verify we can read sector 0
     if (virtio_blk_read(0, buffer, 1) != 0) {
-        printf("TAR: Failed to read sector 0\n");
+        printk("TAR: Failed to read sector 0\n");
         return;
     }
     struct tar_header *header = (struct tar_header *)buffer;
     
-    printf("TAR: First file: %s\n", header->name);
-    printf("TAR: Magic: %s\n", header->magic);
+    printk("TAR: First file: %s\n", header->name);
+    printk("TAR: Magic: %s\n", header->magic);
 }
 
 int tar_find(const char *name, uint64_t *start_sector, uint32_t *file_size) {
     uint64_t sector = 0;
     
     while (1) {
-        // printf("TAR: Checking sector %d\n", (int)sector);
+        // printk("TAR: Checking sector %d\n", (int)sector);
         if (virtio_blk_read(sector, sector_buffer, 1) != 0) {
-            // printf("TAR: Read error at sector %d\n", (int)sector);
+            // printk("TAR: Read error at sector %d\n", (int)sector);
             return -1;
         }
         struct tar_header *header = (struct tar_header *)sector_buffer;
         
         if (header->name[0] == 0) {
-            // printf("TAR: End of archive at sector %d\n", (int)sector);
+            // printk("TAR: End of archive at sector %d\n", (int)sector);
             return -1; // End of archive
         }
         
-        // printf("TAR: Found file: %s\n", header->name);
+        // printk("TAR: Found file: %s\n", header->name);
         
         uint32_t size = parse_octal(header->size, 11);
         

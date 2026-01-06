@@ -1,7 +1,10 @@
 #include "syscall.h"
-#include "output.h"
-
+#include "uart.h"
+#include "print.h"
+#include "string.h"
+#include "process.h"
 #include "sched.h"
+#include "irq.h"
 
 void sys_write(struct pt_regs *regs) {
     // x0 = fd, x1 = buf, x2 = len
@@ -10,9 +13,9 @@ void sys_write(struct pt_regs *regs) {
     int len = regs->x2;
     
     for (int i = 0; i < len; i++) {
-        putc(buf[i]);
+        uart_write_char(buf[i]);
     }
-    // printf("sys_write: wrote %d bytes from %p\n", len, buf);
+    // printk("sys_write: wrote %d bytes from %p\n", len, buf);
 }
 
 
@@ -23,7 +26,7 @@ void sys_read(struct pt_regs *regs) {
     // int len = regs->x2;
     
     // Block until char received
-    char c = uart_read();
+    char c = uart_read_char();
     
     // Write to user buffer
     *buf = c;
@@ -31,7 +34,7 @@ void sys_read(struct pt_regs *regs) {
     // Debug print
     uint64_t daif;
     asm volatile("mrs %0, daif" : "=r"(daif));
-    // printf("sys_read: daif=%lx, buf=%p\n", daif, buf);
+    // printk("sys_read: daif=%lx, buf=%p\n", daif, buf);
     
     // Block until char received
     
@@ -40,7 +43,7 @@ void sys_read(struct pt_regs *regs) {
 }
 
 void sys_exit(struct pt_regs *regs) {
-    printf("sys_exit called with code=%d\n", regs->x0);
+    printk("sys_exit called with code=%d\n", regs->x0);
     kthread_exit();
 }
 
@@ -58,7 +61,7 @@ void svc_handler_c(struct pt_regs *regs, uint64_t esr) {
         uint64_t syscall_num = regs->x8;
         
         // Handle specific syscalls
-        // printf("syscall: %d, x0=%p, x1=%p, x2=%p, lr=%p\n", syscall_num, (void*)regs->x0, (void*)regs->x1, (void*)regs->x2, (void*)regs->x30);
+        // printk("syscall: %d, x0=%p, x1=%p, x2=%p, lr=%p\n", syscall_num, (void*)regs->x0, (void*)regs->x1, (void*)regs->x2, (void*)regs->x30);
         
         switch (syscall_num) {
             case 63: // sys_read
@@ -74,7 +77,7 @@ void svc_handler_c(struct pt_regs *regs, uint64_t esr) {
                 sys_yield(regs);
                 break;
             default:
-                printf("Unknown Syscall: %d\n", syscall_num);
+                printk("Unknown Syscall: %d\n", syscall_num);
                 break;
         }
         
@@ -85,7 +88,7 @@ void svc_handler_c(struct pt_regs *regs, uint64_t esr) {
         uint64_t elr, far;
         asm volatile("mrs %0, elr_el1" : "=r"(elr));
         asm volatile("mrs %0, far_el1" : "=r"(far));
-        printf("Unexpected Sync Exception: ESR=%x ELR=%x FAR=%x\n", esr, elr, far);
+        printk("Unexpected Sync Exception: ESR=%x ELR=%x FAR=%x\n", esr, elr, far);
         while(1);
     }
 }

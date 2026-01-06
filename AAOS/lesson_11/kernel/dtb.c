@@ -1,9 +1,10 @@
 #include "dtb.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 
-// Prototypes for output functions if not in output.h
-extern void safe_puts(const char *s);
-extern void safe_puthex(uint64_t v);
+// Prototypes for output functions if not in uart.h
+
 
 #define FDT_BEGIN_NODE 0x00000001
 #define FDT_END_NODE   0x00000002
@@ -39,11 +40,11 @@ void dtb_init(uint64_t dtb_ptr) {
     struct fdt_header *header = (struct fdt_header *)dtb_ptr;
     
     if (be32_to_cpu(header->magic) != FDT_MAGIC) {
-        safe_puts("Invalid DTB Magic!\n");
+        kputs("Invalid DTB Magic!\n");
         return;
     }
     
-    safe_puts("DTB Magic Valid.\n");
+    kputs("DTB Magic Valid.\n");
     
     uint32_t off_struct = be32_to_cpu(header->off_dt_struct);
     // uint32_t off_strings = be32_to_cpu(header->off_dt_strings);
@@ -59,10 +60,10 @@ void dtb_init(uint64_t dtb_ptr) {
         
         if (token == FDT_BEGIN_NODE) {
             char *name = (char *)struct_ptr;
-            // safe_puts("Node: "); safe_puts(name); safe_puts("\n");
+            // kputs("Node: "); kputs(name); kputs("\n");
             
             if (strncmp(name, "memory", 6) == 0) {
-                // safe_puts("Found Memory Node!\n");
+                // kputs("Found Memory Node!\n");
                 in_memory_node = 1;
             } else {
                 in_memory_node = 0;
@@ -101,8 +102,8 @@ void dtb_init(uint64_t dtb_ptr) {
                         uint64_t base_addr = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
                         uint64_t size = ((uint64_t)be32_to_cpu(cells[2]) << 32) | be32_to_cpu(cells[3]);
                         
-                        safe_puts("Memory Base: "); safe_puthex(base_addr); safe_puts("\n");
-                        safe_puts("Memory Size: "); safe_puthex(size); safe_puts("\n");
+                        kputs("Memory Base: "); kputhex(base_addr); kputs("\n");
+                        kputs("Memory Size: "); kputhex(size); kputs("\n");
                         
                         memory_base = base_addr;
                         memory_size = size;

@@ -1,5 +1,7 @@
 #include "sched.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "timer.h"
 
 struct task_struct task[NR_CORES][NR_TASKS_PER_CORE];
@@ -27,7 +29,7 @@ void init_scheduler(void) {
     }
     
     if (core_id == 0) {
-        puts("Scheduler Initialized. Per-Core PCB Arrays.\n");
+        printk("Scheduler Initialized. Per-Core PCB Arrays.\n");
     }
 }
 
@@ -146,7 +148,7 @@ void timer_tick() {
     }
 
     --current->counter;
-    // unsafe_puts("Tick "); unsafe_puthex(current->counter); unsafe_puts("\n");
+    // unkputs("Tick "); unkputhex(current->counter); unkputs("\n");
     
     // If current is not running, we are likely in the idle loop.
     // Don't preempt. The idle loop will check for new tasks after we return.
@@ -159,6 +161,6 @@ void timer_tick() {
     }
     current->counter = current->priority; // Reset counter
     
-    // unsafe_puts("Preempt\n");
+    // unkputs("Preempt\n");
     schedule();
 }

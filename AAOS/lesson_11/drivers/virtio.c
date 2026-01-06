@@ -1,5 +1,7 @@
 #include "virtio.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "pmm.h"
 #include "utils.h"
 
@@ -32,9 +34,9 @@ void virtio_init(void) {
         uint32_t device_id = virtio_reg_read32(VIRTIO_MMIO_DEVICE_ID);
         
         if (magic == 0x74726976) {
-            printf("VirtIO: Found Device ID %d at %p\n", device_id, (void*)base);
+            printk("VirtIO: Found Device ID %d at %p\n", device_id, (void*)base);
             if (device_id == 2) {
-                printf("VirtIO: Using Block Device at %p\n", (void*)base);
+                printk("VirtIO: Using Block Device at %p\n", (void*)base);
                 found_device = 1;
                 goto found;
             }
@@ -42,17 +44,17 @@ void virtio_init(void) {
     }
     
     if (!found_device) {
-        printf("VirtIO: No Block Device found!\n");
+        printk("VirtIO: No Block Device found!\n");
         return;
     }
 
 found:
     uint32_t version = virtio_reg_read32(VIRTIO_MMIO_VERSION);
-    printf("VirtIO: Version=%x\n", version);
+    printk("VirtIO: Version=%x\n", version);
 
     // Read Device Features
     uint32_t features = virtio_reg_read32(VIRTIO_MMIO_DEVICE_FEATURES);
-    printf("VirtIO: Device Features=%x\n", features);
+    printk("VirtIO: Device Features=%x\n", features);
 
     // 1. Reset device
     virtio_reg_write32(VIRTIO_MMIO_STATUS, 0);
@@ -75,7 +77,7 @@ found:
         
         // Check if device accepts features
         if (!(virtio_reg_read32(VIRTIO_MMIO_STATUS) & VIRTIO_STATUS_FEATURES_OK)) {
-            printf("VirtIO: Feature negotiation failed!\n");
+            printk("VirtIO: Feature negotiation failed!\n");
             return;
         }
     }
@@ -86,13 +88,13 @@ found:
     
     uint32_t max_num = virtio_reg_read32(VIRTIO_MMIO_QUEUE_NUM_MAX);
     if (max_num == 0) {
-        printf("VirtIO: Queue not available!\n");
+        printk("VirtIO: Queue not available!\n");
         return;
     }
     
     // Set Queue Num
     virtio_reg_write32(VIRTIO_MMIO_QUEUE_NUM, VIRTIO_RING_SIZE);
-    printf("VirtIO: QueueNumMax=%d, Set QueueNum=%d, ReadBack=%d\n", max_num, VIRTIO_RING_SIZE, virtio_reg_read32(VIRTIO_MMIO_QUEUE_NUM));
+    printk("VirtIO: QueueNumMax=%d, Set QueueNum=%d, ReadBack=%d\n", max_num, VIRTIO_RING_SIZE, virtio_reg_read32(VIRTIO_MMIO_QUEUE_NUM));
     
     // Set Queue Align
     virtio_reg_write32(0x03C, 4096); // VIRTIO_MMIO_QUEUE_ALIGN
@@ -105,13 +107,13 @@ found:
     void *page2 = pmm_alloc_page();
     
     if (!page1 || !page2) {
-        printf("VirtIO: Failed to allocate ring memory!\n");
+        printk("VirtIO: Failed to allocate ring memory!\n");
         return;
     }
     
     // Check contiguity for Legacy
     if (version == 1 && (uint64_t)page2 != (uint64_t)page1 + 4096) {
-        printf("VirtIO: Ring memory not contiguous! p1=%p p2=%p\n", page1, page2);
+        printk("VirtIO: Ring memory not contiguous! p1=%p p2=%p\n", page1, page2);
         // In a real driver, we would free and retry or handle non-contiguous for Modern
         return;
     }
@@ -142,7 +144,7 @@ found:
         // PFN = Address / 4096
         // ring_mem is a Virtual Address (High Half). Convert to Physical.
         uint64_t ring_pa = (uint64_t)ring_mem - VA_OFFSET;
-        printf("VirtIO: Ring PA=%p, PFN=%x\n", (void*)ring_pa, ring_pa / 4096);
+        printk("VirtIO: Ring PA=%p, PFN=%x\n", (void*)ring_pa, ring_pa / 4096);
         virtio_reg_write32(0x040, ring_pa / 4096); // VIRTIO_MMIO_QUEUE_PFN
     } else {
         // Modern Setup (Version 2+)
@@ -168,7 +170,7 @@ found:
     free_head = 0;
     used_idx = 0;
     
-    printf("VirtIO: Block Device Initialized!\n");
+    printk("VirtIO: Block Device Initialized!\n");
 }
 
 int virtio_blk_read(uint64_t sector, void *buffer, uint32_t count) {
@@ -247,24 +249,24 @@ int virtio_blk_read(uint64_t sector, void *buffer, uint32_t count) {
     while (used->idx == used_idx && timeout > 0) {
         if (timeout % 100000 == 0) {
             uint32_t dev_status = virtio_reg_read32(VIRTIO_MMIO_STATUS);
-            printf("VirtIO: Waiting... used->idx=%d used_idx=%d Status=%x\n", used->idx, used_idx, dev_status);
+            printk("VirtIO: Waiting... used->idx=%d used_idx=%d Status=%x\n", used->idx, used_idx, dev_status);
             
             if (!debug_printed) {
-                printf("VirtIO Debug:\n");
-                printf("  Desc: %p, Avail: %p, Used: %p\n", desc, avail, used);
-                printf("  Req PA: %p, Buf PA: %p, Status PA: %p\n", (void*)req_pa, (void*)buffer_pa, (void*)status_pa);
-                printf("  Queue Num: %d\n", virtio_reg_read32(VIRTIO_MMIO_QUEUE_NUM));
-                printf("  Queue Ready: %d\n", virtio_reg_read32(VIRTIO_MMIO_QUEUE_READY));
-                printf("  Interrupt Status: %x\n", virtio_reg_read32(VIRTIO_MMIO_INTERRUPT_STATUS));
+                printk("VirtIO Debug:\n");
+                printk("  Desc: %p, Avail: %p, Used: %p\n", desc, avail, used);
+                printk("  Req PA: %p, Buf PA: %p, Status PA: %p\n", (void*)req_pa, (void*)buffer_pa, (void*)status_pa);
+                printk("  Queue Num: %d\n", virtio_reg_read32(VIRTIO_MMIO_QUEUE_NUM));
+                printk("  Queue Ready: %d\n", virtio_reg_read32(VIRTIO_MMIO_QUEUE_READY));
+                printk("  Interrupt Status: %x\n", virtio_reg_read32(VIRTIO_MMIO_INTERRUPT_STATUS));
                 debug_printed = 1;
             }
             
             if (dev_status & VIRTIO_STATUS_DEVICE_NEEDS_RESET) {
-                printf("VirtIO: Device needs reset!\n");
+                printk("VirtIO: Device needs reset!\n");
                 return -1;
             }
             if (dev_status & VIRTIO_STATUS_FAILED) {
-                printf("VirtIO: Device failed!\n");
+                printk("VirtIO: Device failed!\n");
                 return -1;
             }
         }
@@ -273,14 +275,14 @@ int virtio_blk_read(uint64_t sector, void *buffer, uint32_t count) {
     }
     
     if (timeout == 0) {
-        printf("VirtIO: Read timed out! used->idx=%d used_idx=%d\n", used->idx, used_idx);
+        printk("VirtIO: Read timed out! used->idx=%d used_idx=%d\n", used->idx, used_idx);
         return -1;
     }
     
     used_idx++;
     
     if (*status != 0) {
-        // printf("VirtIO: Read failed! Status Addr=%p Value=%x\n", status, *status);
+        // printk("VirtIO: Read failed! Status Addr=%p Value=%x\n", status, *status);
         return -1;
     }
     

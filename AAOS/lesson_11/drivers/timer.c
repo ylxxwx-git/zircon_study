@@ -1,6 +1,8 @@
 #include "timer.h"
 #include "gic.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "sched.h"
 
 // Timer Interval (approx 1 second if freq is 62.5MHz, but QEMU might differ)
@@ -11,9 +13,7 @@ void timer_init(void) {
     // 1. Read System Frequency
     uint64_t freq;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
-    puts("Timer Frequency: ");
-    puthex(freq);
-    puts(" Hz\n");
+    printk("Timer Frequency: %x Hz\n", freq);
     
     timer_interval = freq / 10; // 1 interrupt per 100ms (10Hz)
 
@@ -45,10 +45,6 @@ uint64_t get_timer_freq(void) {
 }
 
 extern int get_core_id();
-extern void safe_puts(const char *s);
-extern void safe_puthex(uint64_t v);
-extern void lock_uart();
-extern void unlock_uart();
 
 void timer_handler(void) {
     int core_id = get_core_id();
