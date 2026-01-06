@@ -27,50 +27,45 @@ void mmu_init(void) {
 }
 
 // Map a single 4KB page at VA 0x0 to PA `pa` for User (EL0)
-// This requires splitting the first 1GB Block (Identity Map) into L2/L3 tables.
+// This creates a NEW L1 table for the process and switches TTBR0.
 void map_user_page(uint64_t pa) {
-    // 1. Allocate L2 Table
+    // 1. Allocate NEW L1 Table
+    uint64_t *l1_table = pmm_alloc_page();
+    if (!l1_table) return;
+    
+    // 2. Allocate L2 Table
     uint64_t *l2_table = pmm_alloc_page();
     if (!l2_table) return;
     
-    // 2. Allocate L3 Table (for the first 2MB)
+    // 3. Allocate L3 Table (for the first 2MB)
     uint64_t *l3_table = pmm_alloc_page();
     if (!l3_table) return;
     
-    // 3. Initialize L2 Table
-    // We want to preserve the Identity Map for 0x0 - 0x40000000 (1GB)
-    // But we are replacing the 1GB Block at L1[0] with this L2 table.
-    // So we must fill L2 with 2MB Blocks that match the original 1GB Block (Device).
-    // EXCEPT L2[0] which will point to L3.
+    // 4. Initialize Tables (Zero them out)
+    memset(l1_table, 0, 4096);
+    memset(l2_table, 0, 4096);
+    memset(l3_table, 0, 4096);
     
-    // Fill L2 with Device Blocks (0x00000000 + offset)
-    // REMOVED: We now use Kernel VA for UART, so we don't need to map Device Memory in User Space.
-    /*
-    for (int i = 0; i < 512; i++) {
-        uint64_t block_pa = i * 0x200000; // 2MB * i
-        l2_table[i] = block_pa | PTE_BLOCK_DEVICE;
-    }
-    */
-    // Zero out L2 table instead
-    for (int i = 0; i < 512; i++) {
-        l2_table[i] = 0;
-    }
+    // 5. Link Tables
+    // L1[0] -> L2
+    uint64_t l2_pa = (uint64_t)l2_table - 0xFFFFFFFF40000000;
+    l1_table[0] = l2_pa | PTE_TABLE_DESC;
     
-    // Point L2[0] to L3 Table (Use Physical Address)
+    // L2[0] -> L3
     uint64_t l3_pa = (uint64_t)l3_table - 0xFFFFFFFF40000000;
     l2_table[0] = l3_pa | PTE_TABLE_DESC;
     
-    // 5. Update L3 Table [0] for User Page
+    // 6. Map User Page at L3[0]
     // L3[0] -> User Page (PA)
     // AP[1]=1 (User RW)
     l3_table[0] = pa | PTE_PAGE_RAM | PTE_ATTR_AP_RW_USER;
     
-    // 6. Update L1 Table (idmap_table)
-    uint64_t l2_pa = (uint64_t)l2_table - 0xFFFFFFFF40000000;
-    idmap_table[0] = l2_pa | PTE_TABLE_DESC;
+    // 7. Switch TTBR0 to new L1 Table
+    uint64_t l1_pa = (uint64_t)l1_table - 0xFFFFFFFF40000000;
+    set_ttbr0_el1(l1_pa);
     
-    // 7. Invalidate TLB
+    // 8. Invalidate TLB
     tlb_invalidate_all();
     
-    kputs("Mapped User Page at 0x0\n");
+    kputs("Mapped User Page at 0x0 (New Table)\n");
 }
