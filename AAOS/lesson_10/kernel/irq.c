@@ -1,6 +1,9 @@
 #include "gic.h"
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "timer.h"
+#include "print.h"
 
 void irq_handler_c(void) {
     // 1. Acknowledge the interrupt
@@ -18,9 +21,7 @@ void irq_handler_c(void) {
     } else if (int_id == 33) {
         uart_handler();
     } else {
-        puts("Received IRQ: ");
-        puthex(int_id);
-        puts("\n");
+        printk("Received IRQ: %x\n", int_id);
     }
 
     // 4. End the interrupt

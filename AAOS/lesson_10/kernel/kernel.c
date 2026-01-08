@@ -1,4 +1,6 @@
-#include "output.h"
+#include "uart.h"
+#include "print.h"
+#include "string.h"
 #include "gic.h"
 #include "timer.h"
 #include "dtb.h"
@@ -10,8 +12,6 @@
 #include "tar.h"
 
 extern int get_core_id();
-void safe_puts(const char *s);
-void safe_puthex(uint64_t v);
 
 
 // Always use HVC. If we are in EL2, our shim handles it.
@@ -42,7 +42,6 @@ void lock_mutex(volatile int *lock) {
 }
 
 volatile int gic_ready = 0;
-volatile int uart_lock = 0;
 
 extern void _start();
 extern void sleep_ms(uint64_t ms);
@@ -53,57 +52,23 @@ extern void *pmm_alloc_page();
 void init_other_cores() {
     // Wake up secondary cores using PSCI
     // We assume they are in a holding pen (QEMU default)
-    safe_puts("Core 0: Waking up secondary cores...\n");
+    printk("Core 0: Waking up secondary cores...\n");
     uint64_t entry_point = 0x40000000; // Physical address of _start
     psci_cpu_on(1, entry_point);
     psci_cpu_on(2, entry_point);
     psci_cpu_on(3, entry_point);
 }
 
-void lock_uart() {
-    lock_mutex(&uart_lock);
-}
-
-void unlock_uart() {
-    unlock_mutex(&uart_lock);
-}
-
-void safe_puts(const char *s) {
-    lock_uart();
-    puts(s);
-    unlock_uart();
-}
-
-void safe_puthex(uint64_t v) {
-    lock_uart();
-    puthex(v);
-    unlock_uart();
-}
-
-void unsafe_puts(const char *s) {
-    puts(s);
-}
-
-void unsafe_puthex(uint64_t v) {
-    puthex(v);
-}
-
 void test_thread() {
     int core_id = get_core_id();
-    printf("Test Thread Started\n");
+    printk("Test Thread Started\n");
     while (1) {
-        // printf("Core %x Core, Task 1 Running\n", core_id);
+        // printk("Core %x Core, Task 1 Running\n", core_id);
         sleep_ms(100);
     }
 }
 
-// Stack frame structure matches stp order in boot.S
-struct pt_regs {
-    uint64_t x0, x1, x2, x3, x4, x5, x6, x7;
-    uint64_t x8, x9, x10, x11, x12, x13, x14, x15;
-    uint64_t x16, x17, x18, x30;
-    uint64_t spsr, elr;
-};
+#include "irq.h"
 
 
 
@@ -130,10 +95,10 @@ void kernel_main(uint64_t dtb_ptr32, uint64_t x1, uint64_t x2, uint64_t x3) {
         
         // Create Test Thread for Core 0
         int pid = kthread_create(test_thread);
-        printf("Core 0 Created Thread PID: %x\n", pid);
+        printk("Core 0 Created Thread PID: %x\n", pid);
         
         // 2. Initialize GIC & Wake Secondary Cores
-        printf("Core 0: Initializing GIC Distributor...\n");
+        printk("Core 0: Initializing GIC Distributor...\n");
         gic_dist_init();
         
         // Enable UART RX Interrupt (ID 33)
@@ -143,13 +108,13 @@ void kernel_main(uint64_t dtb_ptr32, uint64_t x1, uint64_t x2, uint64_t x3) {
         init_other_cores();
     } else {
         // Secondary Cores need to initialize their scheduler (current pointer)
-        printf("Core %x: Entered Kernel Main\n", core_id);
+        printk("Core %x: Entered Kernel Main\n", core_id);
         
         init_scheduler();
         
         // Create Test Thread for this Core
         int pid = kthread_create(test_thread);
-        printf("Core %x Created Thread PID: %x\n", core_id, pid);
+        printk("Core %x Created Thread PID: %x\n", core_id, pid);
     }
     
     // 3. Initialize GIC CPU Interface (All Cores)
@@ -161,7 +126,7 @@ void kernel_main(uint64_t dtb_ptr32, uint64_t x1, uint64_t x2, uint64_t x3) {
     // 5. Enable Interrupts
     asm volatile("msr daifclr, #2");
     
-    printf("Core %x: Interrupts Enabled!\n", core_id);
+    printk("Core %x: Interrupts Enabled!\n", core_id);
 
     // 6. User Mode Test
     // Remap UART to Kernel VA (Higher Half)
@@ -169,27 +134,27 @@ void kernel_main(uint64_t dtb_ptr32, uint64_t x1, uint64_t x2, uint64_t x3) {
     if (core_id == 0) {
         uart_remap();
         gic_remap();
-        printf("UART & GIC Remapped to Kernel VA\n");
+        printk("UART & GIC Remapped to Kernel VA\n");
     }
     
     if (core_id == 0) {
-        printf("Core 0: Initializing VirtIO...\n");
+        printk("Core 0: Initializing VirtIO...\n");
         virtio_init();
-        printf("Core 0: Initializing TAR FS...\n");
+        printk("Core 0: Initializing TAR FS...\n");
         tar_init();
         
         uint64_t current_el;
     asm volatile("mrs %0, CurrentEL" : "=r"(current_el));
     uint64_t sctlr;
     asm volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-    printf("CurrentEL: %x, SCTLR_EL1: %x\n", current_el >> 2, sctlr);
+    printk("CurrentEL: %x, SCTLR_EL1: %x\n", current_el >> 2, sctlr);
     
     create_user_process("./shell.bin");
     }
 
     // 6. Task 0
     while (1) {
-        // printf("Core %x Core, Task 0 Running\n", core_id);
+        // printk("Core %x Core, Task 0 Running\n", core_id);
         sleep_ms(100);
     }
 }

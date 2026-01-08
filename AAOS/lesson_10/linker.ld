@@ -67,8 +67,10 @@ SECTIONS
     _end = .;
     _heap_start = .;
     
-    /* Define the stack top at 128MB offset from BASE_ADDR */
-    _stack_top = 0x40000000 + 0x08000000;
+    /* Define the stack top at 128MB offset from BASE_ADDR, mapped to High Kernel */
+    /* RAM starts at 0x40000000 (PA) -> 0xFFFFFFFF80000000 (VA) */
+    /* So we add 0xFFFFFFFF40000000 to PA to get VA */
+    _stack_top = 0xFFFFFFFF40000000 + BASE_ADDR + 0x08000000;
 
     /* Discard unwanted sections to keep the image clean */
     /DISCARD/ : {
