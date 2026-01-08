@@ -75,5 +75,6 @@ run: kernel.img disk.img
 clean:
 	@echo "Cleaning up..."
 	rm -f $(OBJS) kernel.elf kernel.img disk.img
+	rm -f $(KERNEL_DIR)/*.o $(DRIVERS_DIR)/*.o $(MM_DIR)/*.o $(FS_DIR)/*.o $(LIB_DIR)/*.o
 	rm -rf rootfs
 	$(MAKE) -C $(USER_DIR) clean
