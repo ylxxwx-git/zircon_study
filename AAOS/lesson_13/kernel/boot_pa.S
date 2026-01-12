@@ -1,0 +1,183 @@
+.section .idmap.text, "ax"
+.global _start
+
+// Constants for Page Table Attributes
+.equ MAIR_VALUE,    0x000000000000FF00 // Attr0=Device, Attr1=Normal
+.equ TCR_VALUE,     0x00000000B5210021 // T0SZ=33, T1SZ=33 (2GB), TG0=4K, TG1=4K, IPS=32bit, SH1=3, ORGN1=1, IRGN1=1
+
+.equ PTE_BLOCK,     0x401 // Valid, Table/Block, Access
+.equ PTE_DEVICE,    0x401 | (0 << 2) | (1 << 10) | (1 << 53) | (1 << 54) // Attr0, AF, PXN, UXN
+.equ PTE_RAM,       0x401 | (1 << 2) | (1 << 10) | (3 << 8) // Attr1, AF, ISH
+
+_start:
+    // Save DTB Pointer
+    mov x20, x0
+
+    // 1. Check Core ID
+    mrs x0, mpidr_el1
+    and x0, x0, #3
+    cbz x0, master_core
+    
+    // Secondary Cores: Wait for MMU ready flag
+    adr x1, mmu_ready_flag
+wait_for_mmu:
+    ldr w2, [x1]
+    cbz w2, wait_for_mmu
+    
+    // Secondary Cores: Enable MMU
+    b enable_mmu_secondary
+
+master_core:
+    // Setup Early Vector Table
+    ldr x0, =early_vector_table
+    msr vbar_el1, x0
+    isb
+    
+    // 2. Setup Page Tables
+    // Setup idmap_table (TTBR0)
+    ldr x0, =idmap_table
+    
+    // Entry 0: 0x00000000 (Device) - For UART
+    mov x1, #0
+    ldr x2, =PTE_DEVICE
+    orr x2, x1, x2
+    str x2, [x0, #0]
+    
+    // Entry 1: 0x40000000 (RAM) - For Boot Code (Covers 0x40000000-0x7FFFFFFF)
+    ldr x1, =0x40000000
+    ldr x2, =PTE_RAM
+    orr x2, x1, x2
+    str x2, [x0, #8]
+    
+    // Setup kernel_table (TTBR1)
+    ldr x0, =kernel_table
+    
+    // Index 0: 0xFFFFFFFF80000000 -> 0x40000000 (RAM)
+    ldr x1, =0x40000000
+    ldr x2, =PTE_RAM
+    orr x2, x1, x2
+    str x2, [x0, #0]
+    
+    // Index 1: 0xFFFFFFFFC0000000 -> 0x00000000 (Device)
+    mov x1, #0
+    ldr x2, =PTE_DEVICE
+    orr x2, x1, x2
+    str x2, [x0, #8]
+    
+    // 3. Setup MAIR
+    ldr x0, =MAIR_VALUE
+    msr mair_el1, x0
+    
+    // 4. Setup TCR
+    ldr x0, =TCR_VALUE
+    msr tcr_el1, x0
+    
+    // 5. Setup TTBR0 and TTBR1
+    ldr x0, =idmap_table
+    msr ttbr0_el1, x0
+    ldr x0, =kernel_table
+    msr ttbr1_el1, x0
+    isb
+    
+    // 5.5 Invalidate TLB and Caches
+    tlbi vmalle1
+    ic iallu
+    dsb ish
+    isb
+    
+    // 6. Enable MMU (No Caches for debugging)
+    mov x0, #0
+    msr sctlr_el1, x0  // Clear SCTLR first
+    orr x0, x0, #1     // M bit
+    // orr x0, x0, #4     // C bit (Cache)
+    // orr x0, x0, #0x1000 // I bit (I-Cache)
+    msr sctlr_el1, x0
+    isb
+    
+    // 7. Jump to High Kernel (el1_entry)
+    ldr x0, =el1_entry
+    
+    // Signal secondary cores that MMU tables are ready
+    adr x1, mmu_ready_flag
+    mov w2, #1
+    str w2, [x1]
+    
+    // Ensure visibility
+    dsb ish
+    sev
+    
+    // Jump
+    br x0
+
+enable_mmu_secondary:
+    // 3. Setup MAIR (Same as master)
+    ldr x0, =MAIR_VALUE
+    msr mair_el1, x0
+    
+    // 4. Setup TCR (Same as master)
+    ldr x0, =TCR_VALUE
+    msr tcr_el1, x0
+    
+    // 5. Setup TTBR0 and TTBR1 (Point to same tables)
+    ldr x0, =idmap_table
+    msr ttbr0_el1, x0
+    ldr x0, =kernel_table
+    msr ttbr1_el1, x0
+    isb
+    
+    // 5.5 Invalidate TLB
+    tlbi vmalle1
+    ic iallu
+    dsb ish
+    isb
+    
+    // 6. Enable MMU
+    mov x0, #0
+    msr sctlr_el1, x0
+    orr x0, x0, #1     // M bit
+    msr sctlr_el1, x0
+    isb
+    
+    // 7. Jump to High Kernel
+    ldr x0, =el1_entry
+    br x0
+
+bad_target:
+    b .
+
+// Early Exception Vector
+.align 11
+early_vector_table:
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+    .align 7; b early_handler
+
+early_handler:
+    mov x1, #0x09000000
+    mov w2, #'!'
+    str w2, [x1]
+    b .
+
+.section .idmap.data, "aw"
+.align 4
+mmu_ready_flag: .word 0
+
+.align 12
+.global idmap_table
+idmap_table:
+    .space 4096
+kernel_table:
+    .space 4096
