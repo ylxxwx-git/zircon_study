@@ -1,0 +1,105 @@
+/* =========================================================================
+ * dtb.c - Flattened Device Tree (FDT) Parser
+ * Discovers physical RAM arena base & size passed by QEMU in x0.
+ * ========================================================================= */
+#include "dtb.h"
+#include "debuglog.h"
+
+#define FDT_BEGIN_NODE 0x00000001U
+#define FDT_END_NODE   0x00000002U
+#define FDT_PROP       0x00000003U
+#define FDT_NOP        0x00000004U
+#define FDT_END        0x00000009U
+
+static uint32_t be32_to_cpu(uint32_t be) {
+    return ((be & 0xFF000000U) >> 24) |
+           ((be & 0x00FF0000U) >> 8)  |
+           ((be & 0x0000FF00U) << 8)  |
+           ((be & 0x000000FFU) << 24);
+}
+
+static int str_eq(const char *a, const char *b) {
+    while (*a && *b) {
+        if (*a != *b) return 0;
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static int str_starts_with(const char *s, const char *prefix) {
+    while (*prefix) {
+        if (*s++ != *prefix++) return 0;
+    }
+    return 1;
+}
+
+static uintptr_t align4(uintptr_t p) {
+    return (p + 3U) & ~((uintptr_t)3U);
+}
+
+int dtb_parse(uint64_t dtb_paddr, boot_info_t *out_info) {
+    /* Default fallback for QEMU -M virt (128MB at 0x40000000) */
+    out_info->ram_base  = 0x40000000ULL;
+    out_info->ram_size  = 0x08000000ULL;
+    out_info->dtb_paddr = dtb_paddr;
+    out_info->dtb_size  = 0;
+
+    if (dtb_paddr == 0) {
+        dprintf(INFO, "[dtb] No DTB pointer in x0; using default 128MB arena\n");
+        return -1;
+    }
+
+    const struct fdt_header *hdr = (const struct fdt_header *)(uintptr_t)dtb_paddr;
+    if (be32_to_cpu(hdr->magic) != FDT_MAGIC) {
+        dprintf(INFO, "[dtb] Invalid FDT magic at %p; using default 128MB arena\n",
+                (void *)dtb_paddr);
+        return -1;
+    }
+
+    out_info->dtb_size = be32_to_cpu(hdr->totalsize);
+    uintptr_t struct_ptr = (uintptr_t)dtb_paddr + be32_to_cpu(hdr->off_dt_struct);
+    uintptr_t struct_end = struct_ptr + be32_to_cpu(hdr->size_dt_struct);
+    uintptr_t strings_base = (uintptr_t)dtb_paddr + be32_to_cpu(hdr->off_dt_strings);
+
+    int in_memory_node = 0;
+
+    while (struct_ptr < struct_end) {
+        uint32_t token = be32_to_cpu(*(const uint32_t *)struct_ptr);
+        struct_ptr += 4;
+
+        if (token == FDT_BEGIN_NODE) {
+            const char *name = (const char *)struct_ptr;
+            in_memory_node = str_starts_with(name, "memory");
+            uintptr_t len = 0;
+            while (name[len] != '\0') len++;
+            struct_ptr = align4(struct_ptr + len + 1);
+        } else if (token == FDT_PROP) {
+            uint32_t len     = be32_to_cpu(*(const uint32_t *)struct_ptr);
+            uint32_t nameoff = be32_to_cpu(*(const uint32_t *)(struct_ptr + 4));
+            struct_ptr += 8;
+
+            const uint32_t *cells = (const uint32_t *)struct_ptr;
+            const char *prop_name = (const char *)(strings_base + nameoff);
+
+            if (in_memory_node && str_eq(prop_name, "reg") && len >= 16) {
+                uint64_t base = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
+                uint64_t size = ((uint64_t)be32_to_cpu(cells[2]) << 32) | be32_to_cpu(cells[3]);
+                out_info->ram_base = base;
+                out_info->ram_size = size;
+            }
+            struct_ptr = align4(struct_ptr + len);
+        } else if (token == FDT_END_NODE) {
+            in_memory_node = 0;
+        } else if (token == FDT_NOP) {
+            continue;
+        } else if (token == FDT_END) {
+            break;
+        }
+    }
+
+    dprintf(INFO, "[dtb] FDT valid at %p (size=%u bytes): RAM base=%p size=%lu MB\n",
+            (void *)dtb_paddr, out_info->dtb_size,
+            (void *)out_info->ram_base, out_info->ram_size / (1024 * 1024));
+    return 0;
+}
