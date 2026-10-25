@@ -1,34 +1,47 @@
 # =========================================================================
-# ABOS Lesson 16: Modular Microkernel OS Build System (with ulibc & crt0)
+# ABOS Lesson 16: Strict EL1 (kernel/) vs. EL0 (user/) Microkernel Layout
 #
 # Directory Layout:
 #   include/         - Shared kernel, MM, object, syscall, and IPC headers
-#   kernel/          - Core microkernel (boot ASM, exceptions, scheduler, objects, syscalls)
-#   mm/              - Memory management (PMM, kernel heap, 4-level ARMv8 MMU)
-#   drivers/         - Kernel platform drivers (GIC, Timer) + EL0 servers (console-srv, fs-srv)
-#   user/ulibc/      - C Runtime (crt0.S, crt_env.c) & Wrapped Syscall Library (ulibc.c -> libulibc.a)
-#   user/userboot/   - EL0 root bootstrap process
-#   user/shell/      - EL0 interactive capability shell (abos-shell)
-#   user/apps/       - Standalone EL0 applications (calc.c -> image/calc.bin)
-#   image/           - Output images (kernel.elf, kernel.img, calc.bin, disk.img)
+#   kernel/          - Everything running in EL1 (Privileged Microkernel):
+#     kernel/core/   - Boot ASM, exceptions, SMP scheduler, objects, syscalls, main.c
+#     kernel/mm/     - Physical Memory Manager (pmm.c), kernel heap, 4-level MMU
+#     kernel/dev/    - EL1 platform interrupt controller (gic.c), timer, early debuglog
+#   user/            - Everything running in EL0 (Unprivileged User-Space):
+#     user/ulibc/    - C Runtime (crt0.S, crt_env.c) & Syscall Library (ulibc.c -> libulibc.a)
+#     user/drivers/  - EL0 User-Space Drivers: console_srv.c (UART) & fs_srv.c (VirtIO-Blk TAR)
+#     user/userboot/ - EL0 root bootstrap process
+#     user/shell/    - EL0 interactive capability shell (abos-shell)
+#     user/apps/     - Standalone EL0 applications (calc.c -> image/calc.bin)
+#   image/           - Image packaging script & outputs (kernel.img, calc.bin, disk.img)
 # =========================================================================
-TOOLCHAIN_DIR := /usr/local/google/home/lipingliu/80_Zircon/zircon_org/prebuilt/downloads
-GCC_BIN       := $(TOOLCHAIN_DIR)/gcc/bin
-QEMU_BIN      := $(TOOLCHAIN_DIR)/qemu/bin
 
-CROSS_COMPILE := $(GCC_BIN)/aarch64-elf-
+ifneq ($(shell which aarch64-linux-gnu-gcc 2>/dev/null),)
+    CROSS_COMPILE ?= aarch64-linux-gnu-
+else ifneq ($(shell which aarch64-elf-gcc 2>/dev/null),)
+    CROSS_COMPILE ?= aarch64-elf-
+else
+    CROSS_COMPILE ?= ../../../zircon_org/prebuilt/downloads/gcc/bin/aarch64-elf-
+endif
+
+ifneq ($(shell which qemu-system-aarch64 2>/dev/null),)
+    QEMU ?= qemu-system-aarch64
+else
+    QEMU ?= ../../../zircon_org/prebuilt/downloads/qemu/bin/qemu-system-aarch64
+endif
+
 CC            := $(CROSS_COMPILE)gcc
 LD            := $(CROSS_COMPILE)ld
 AR            := $(CROSS_COMPILE)ar
 OBJCOPY       := $(CROSS_COMPILE)objcopy
-QEMU          := $(QEMU_BIN)/qemu-system-aarch64
 
 # Subdirectories
 INC_DIR       := include
-KERNEL_DIR    := kernel
-MM_DIR        := mm
-DRIVERS_DIR   := drivers
+K_CORE_DIR    := kernel/core
+K_MM_DIR      := kernel/mm
+K_DEV_DIR     := kernel/dev
 ULIBC_DIR     := user/ulibc
+U_DRIVERS_DIR := user/drivers
 USERBOOT_DIR  := user/userboot
 SHELL_DIR     := user/shell
 APPS_DIR      := user/apps
@@ -39,12 +52,15 @@ CFLAGS  := -O0 -Wall -Wextra -nostdlib -nostartfiles -ffreestanding \
            -I$(INC_DIR) -I$(ULIBC_DIR)
 LDFLAGS := -n -T linker.ld
 
-# Source files grouped by subsystem
-KERNEL_C_SRCS := $(wildcard $(KERNEL_DIR)/*.c)
-KERNEL_S_SRCS := $(wildcard $(KERNEL_DIR)/*.S)
-MM_SRCS       := $(wildcard $(MM_DIR)/*.c)
-DRIVERS_SRCS  := $(wildcard $(DRIVERS_DIR)/*.c)
+# EL1 Kernel sources
+KERNEL_C_SRCS := $(wildcard $(K_CORE_DIR)/*.c) \
+                 $(wildcard $(K_MM_DIR)/*.c) \
+                 $(wildcard $(K_DEV_DIR)/*.c)
+KERNEL_S_SRCS := $(wildcard $(K_CORE_DIR)/*.S)
+
+# EL0 User-Space system sources
 USER_SYS_SRCS := $(ULIBC_DIR)/ulibc.c \
+                 $(wildcard $(U_DRIVERS_DIR)/*.c) \
                  $(wildcard $(USERBOOT_DIR)/*.c) \
                  $(wildcard $(SHELL_DIR)/*.c)
 
@@ -57,8 +73,6 @@ ULIBC_OBJ     := $(ULIBC_DIR)/ulibc.o
 ULIBC_A       := $(ULIBC_DIR)/libulibc.a
 
 OBJS          := $(KERNEL_C_SRCS:.c=.o) \
-                 $(MM_SRCS:.c=.o) \
-                 $(DRIVERS_SRCS:.c=.o) \
                  $(USER_SYS_SRCS:.c=.o) \
                  $(KERNEL_S_SRCS:.S=.o)
 
@@ -114,4 +128,4 @@ run: $(KERNEL_IMG) $(DISK_IMG)
 
 clean:
 	@echo "Cleaning up build artifacts and image/ outputs..."
-	rm -f $(OBJS) $(CRT_ENV_OBJ) $(ULIBC_A) $(CALC_OBJ) $(KERNEL_ELF) $(KERNEL_IMG) $(CALC_ELF) $(CALC_BIN) $(DISK_IMG)
+	rm -f $(OBJS) $(CRT0_OBJ) $(CRT_ENV_OBJ) $(ULIBC_A) $(CALC_OBJ) $(KERNEL_ELF) $(KERNEL_IMG) $(CALC_ELF) $(CALC_BIN) $(DISK_IMG)
