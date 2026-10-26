@@ -17,3 +17,6 @@ clean:
 			$(MAKE) -C $$dir clean; \
 		fi \
 	done
+
+install-tools:
+	./install_tools.sh
