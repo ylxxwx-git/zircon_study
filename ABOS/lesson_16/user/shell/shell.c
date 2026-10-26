@@ -41,16 +41,23 @@ void shell_entry(uint64_t arg0) {
                 "  exit       - Gracefully shut down console-srv, fs-srv, and shell\n");
         } else if (u_strcmp(line, "caps") == 0) {
             ab_handle_basic_info_t info;
-            shell_print(con_ch, "Shell Capability Table (inspected via sys_object_get_info):\n");
+            con_printf(con_ch, "Shell Capability Table (inspected via sys_object_get_info):\n");
             sys_object_get_info(log_h, &info);
-            shell_print(con_ch, "  [Handle 0] Kernel DebugLog    (type=LOG,     rights=WRITE|DUPLICATE)\n");
+            con_printf(con_ch, "  [Handle 0x%x] Kernel DebugLog     (koid=%lu, type=%u, rights=0x%x)\n",
+                       log_h, info.koid, info.type, info.rights);
             sys_object_get_info(vmar_h, &info);
-            shell_print(con_ch, "  [Handle 1] Root Address Space (type=VMAR,    rights=MAP|READ|WRITE)\n");
+            con_printf(con_ch, "  [Handle 0x%x] Root Address Space  (koid=%lu, type=%u, rights=0x%x)\n",
+                       vmar_h, info.koid, info.type, info.rights);
             sys_object_get_info(con_ch, &info);
-            shell_print(con_ch, "  [Handle 2] Console IPC Channel(type=CHANNEL, rights=READ|WRITE|WAIT)\n");
+            con_printf(con_ch, "  [Handle 0x%x] Console IPC Channel (koid=%lu, type=%u, rights=0x%x)\n",
+                       con_ch, info.koid, info.type, info.rights);
             sys_object_get_info(fs_ch, &info);
-            shell_print(con_ch, "  [Handle 3] Filesystem IPC Chan(type=CHANNEL, rights=READ|WRITE|WAIT)\n");
-            shell_print(con_ch, "  [Note] Shell holds ZERO Resource/MMIO/IRQ handles (pure capability isolation!)\n");
+            con_printf(con_ch, "  [Handle 0x%x] Filesystem IPC Chan (koid=%lu, type=%u, rights=0x%x)\n",
+                       fs_ch, info.koid, info.type, info.rights);
+            sys_object_get_info(job_h, &info);
+            con_printf(con_ch, "  [Handle 0x%x] Parent Job Cap      (koid=%lu, type=%u, rights=0x%x)\n",
+                       job_h, info.koid, info.type, info.rights);
+            con_printf(con_ch, "  [Note] Shell holds ZERO Resource/MMIO/IRQ handles (pure capability isolation!)\n");
         } else if (u_strcmp(line, "ls") == 0) {
             fs_msg_t req = { FS_OP_LIST, 0, 0, "" };
             sys_channel_write(fs_ch, &req, sizeof(req), NULL, 0);
@@ -109,7 +116,7 @@ void shell_entry(uint64_t arg0) {
 
             /* 3. Map the 2-page 'calc.bin' VMO into calc_vmar at VA 0x20000000 (offset 0x10000000) */
             vaddr_t entry_va = 0;
-            sys_vmar_map(calc_vmar, 0x10000000ULL, bin_vmo_h, 0, 2 * PAGE_SIZE,
+            sys_vmar_map(calc_vmar, 0x10000000ULL, bin_vmo_h, 0, 3 * PAGE_SIZE,
                         AB_VM_PERM_READ | AB_VM_PERM_WRITE | AB_VM_PERM_EXECUTE,
                         &entry_va);
             sys_handle_close(bin_vmo_h);

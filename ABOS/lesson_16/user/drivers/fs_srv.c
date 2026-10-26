@@ -206,7 +206,7 @@ void fs_server_entry(uint64_t arg0) {
                 uint32_t fsz = oct2uint(th->size, 12);
                 if (u_strcmp(th->name, req_msg.data) == 0) {
                     ab_handle_t rw_vmo = AB_HANDLE_INVALID;
-                    uint64_t vmo_sz = 2 * PAGE_SIZE;
+                    uint64_t vmo_sz = 3 * PAGE_SIZE;
                     sys_vmo_create(vmo_sz, 0, &rw_vmo);
                     sys_vmo_write(rw_vmo, tar_cache + off + 512, 0, fsz);
                     sys_handle_duplicate(rw_vmo,

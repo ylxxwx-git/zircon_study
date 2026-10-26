@@ -4,13 +4,14 @@
 #ifndef ABOS_ULIBC_H
 #define ABOS_ULIBC_H
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "object.h"
 #include "syscalls.h"
 #include "ipc_proto.h"
 
-/* Low-level SVC entry in crt0.S */
+/* Low-level SVC entry in ulibc.c */
 ab_status_t __ab_syscall4(uint64_t a0, uint64_t a1, uint64_t a2,
                           uint64_t a3, uint64_t syscall_num);
 
@@ -74,7 +75,7 @@ ab_status_t sys_interrupt_wait(ab_handle_t irq_h);
 ab_status_t sys_interrupt_ack(ab_handle_t irq_h);
 
 /* =========================================================================
- * 2. C Runtime Environment & Standard String/Console Helpers
+ * 2. C Runtime Environment, Formatted Printf & Standard Helpers
  * ========================================================================= */
 void        __ulibc_init(ab_handle_t boot_ch);
 int         main(void);
@@ -86,8 +87,13 @@ ab_handle_t ulibc_get_console_handle(void);
 void        u_puts(const char *s);
 void        u_gets(char *out_buf, size_t max_len);
 void        u_dlog(const char *msg);
+int         printf(const char *fmt, ...);
+int         dlog_printf(const char *fmt, ...);
 
-/* Explicit handle Console & DebugLog helpers for system servers/shell */
+/* Formatted string & explicit handle Console/DebugLog helpers */
+int         u_vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
+int         u_snprintf(char *buf, size_t size, const char *fmt, ...);
+int         con_printf(ab_handle_t con_ch, const char *fmt, ...);
 void        ulog(ab_handle_t log_h, const char *msg);
 void        shell_print(ab_handle_t con_ch, const char *text);
 void        shell_readline(ab_handle_t con_ch, char *out_buf, size_t max_len);

@@ -3,7 +3,7 @@
  *
  * Unpacks the bootstrap Channel handle passed in x0 to _start (crt0.S),
  * stores the process's DebugLog and Console Channel capabilities, and
- * provides standard u_puts(), u_gets(), and u_dlog() functions.
+ * provides standard printf(), dlog_printf(), u_puts(), u_gets(), u_dlog().
  * ========================================================================= */
 #include "ulibc.h"
 
@@ -38,4 +38,24 @@ void u_gets(char *out_buf, size_t max_len) {
 
 void u_dlog(const char *msg) {
     ulog(__ulibc_log_h, msg);
+}
+
+int printf(const char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = u_vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    shell_print(__ulibc_con_ch, buf);
+    return n;
+}
+
+int dlog_printf(const char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = u_vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    ulog(__ulibc_log_h, buf);
+    return n;
 }

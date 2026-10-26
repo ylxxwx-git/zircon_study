@@ -292,3 +292,145 @@ void shell_readline(ab_handle_t con_ch, char *out_buf, size_t max_len) {
     }
     out_buf[i] = '\0';
 }
+
+/* =========================================================================
+ * 3. Formatted Output Engine: u_vsnprintf, u_snprintf, con_printf
+ * ========================================================================= */
+static void buf_putc(char *buf, size_t size, size_t *pos, char c) {
+    if (*pos + 1 < size) {
+        buf[*pos] = c;
+    }
+    (*pos)++;
+}
+
+static void buf_puts(char *buf, size_t size, size_t *pos, const char *s) {
+    while (*s) {
+        buf_putc(buf, size, pos, *s++);
+    }
+}
+
+static void buf_put_uint(char *buf, size_t size, size_t *pos,
+                         uint64_t val, uint32_t base, int width, char pad, int upper) {
+    char tmp[24];
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    int i = 0;
+
+    if (val == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (val > 0) {
+            tmp[i++] = digits[val % base];
+            val /= base;
+        }
+    }
+    while (i < width) {
+        tmp[i++] = pad;
+    }
+    while (i > 0) {
+        buf_putc(buf, size, pos, tmp[--i]);
+    }
+}
+
+int u_vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
+    size_t pos = 0;
+    if (!buf || size == 0) return 0;
+
+    while (*fmt) {
+        if (*fmt != '%') {
+            buf_putc(buf, size, &pos, *fmt++);
+            continue;
+        }
+        fmt++; /* skip '%' */
+
+        char pad = ' ';
+        if (*fmt == '0') {
+            pad = '0';
+            fmt++;
+        }
+
+        int width = 0;
+        while (*fmt >= '0' && *fmt <= '9') {
+            width = width * 10 + (*fmt - '0');
+            fmt++;
+        }
+
+        int is_long = 0;
+        while (*fmt == 'l') {
+            is_long = 1;
+            fmt++;
+        }
+
+        switch (*fmt) {
+            case 's': {
+                const char *s = va_arg(ap, const char *);
+                buf_puts(buf, size, &pos, s ? s : "(null)");
+                break;
+            }
+            case 'c': {
+                char c = (char)va_arg(ap, int);
+                buf_putc(buf, size, &pos, c);
+                break;
+            }
+            case 'd':
+            case 'i': {
+                int64_t v = is_long ? va_arg(ap, int64_t) : (int64_t)va_arg(ap, int);
+                if (v < 0) {
+                    buf_putc(buf, size, &pos, '-');
+                    buf_put_uint(buf, size, &pos, (uint64_t)(-v), 10, width, pad, 0);
+                } else {
+                    buf_put_uint(buf, size, &pos, (uint64_t)v, 10, width, pad, 0);
+                }
+                break;
+            }
+            case 'u': {
+                uint64_t v = is_long ? va_arg(ap, uint64_t) : (uint64_t)va_arg(ap, unsigned int);
+                buf_put_uint(buf, size, &pos, v, 10, width, pad, 0);
+                break;
+            }
+            case 'x':
+            case 'X': {
+                uint64_t v = is_long ? va_arg(ap, uint64_t) : (uint64_t)va_arg(ap, unsigned int);
+                buf_put_uint(buf, size, &pos, v, 16, width, pad, (*fmt == 'X'));
+                break;
+            }
+            case 'p': {
+                uint64_t v = (uint64_t)(uintptr_t)va_arg(ap, void *);
+                buf_puts(buf, size, &pos, "0x");
+                buf_put_uint(buf, size, &pos, v, 16, 16, '0', 0);
+                break;
+            }
+            case '%':
+                buf_putc(buf, size, &pos, '%');
+                break;
+            case '\0':
+                goto done;
+            default:
+                buf_putc(buf, size, &pos, '%');
+                buf_putc(buf, size, &pos, *fmt);
+                break;
+        }
+        fmt++;
+    }
+
+done:
+    buf[(pos < size) ? pos : (size - 1)] = '\0';
+    return (int)pos;
+}
+
+int u_snprintf(char *buf, size_t size, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = u_vsnprintf(buf, size, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+int con_printf(ab_handle_t con_ch, const char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = u_vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    shell_print(con_ch, buf);
+    return n;
+}
