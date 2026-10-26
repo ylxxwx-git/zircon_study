@@ -16,18 +16,25 @@
 #   image/           - Image packaging script & outputs (kernel.img, calc.bin, disk.img)
 # =========================================================================
 
+PREBUILT_GCC  := ../../../zircon_org/prebuilt/downloads/gcc/bin/aarch64-elf-gcc
+PREBUILT_QEMU := ../../../zircon_org/prebuilt/downloads/qemu/bin/qemu-system-aarch64
+
 ifneq ($(shell which aarch64-linux-gnu-gcc 2>/dev/null),)
     CROSS_COMPILE ?= aarch64-linux-gnu-
 else ifneq ($(shell which aarch64-elf-gcc 2>/dev/null),)
     CROSS_COMPILE ?= aarch64-elf-
-else
+else ifneq ($(wildcard $(PREBUILT_GCC)),)
     CROSS_COMPILE ?= ../../../zircon_org/prebuilt/downloads/gcc/bin/aarch64-elf-
+else
+    CROSS_COMPILE ?= aarch64-linux-gnu-
 endif
 
 ifneq ($(shell which qemu-system-aarch64 2>/dev/null),)
     QEMU ?= qemu-system-aarch64
+else ifneq ($(wildcard $(PREBUILT_QEMU)),)
+    QEMU ?= $(PREBUILT_QEMU)
 else
-    QEMU ?= ../../../zircon_org/prebuilt/downloads/qemu/bin/qemu-system-aarch64
+    QEMU ?= qemu-system-aarch64
 endif
 
 CC            := $(CROSS_COMPILE)gcc
@@ -84,9 +91,19 @@ CALC_ELF      := $(IMAGE_DIR)/calc.elf
 CALC_BIN      := $(IMAGE_DIR)/calc.bin
 DISK_IMG      := $(IMAGE_DIR)/disk.img
 
-.PHONY: all run clean
+.PHONY: all run clean check-tools install-tools
 
-all: $(ULIBC_A) $(KERNEL_IMG) $(DISK_IMG)
+all: check-tools $(ULIBC_A) $(KERNEL_IMG) $(DISK_IMG)
+
+check-tools:
+	@if ! command -v $(CC) >/dev/null 2>&1 && [ ! -x "$(CC)" ]; then \
+		echo "Error: Cross-compiler '$(CC)' not found!"; \
+		echo "Run './install_tools.sh' (or 'make install-tools') to install AArch64 GCC & QEMU."; \
+		exit 1; \
+	fi
+
+install-tools:
+	./install_tools.sh
 
 %.o: %.c $(HEADERS)
 	@echo "Compiling $<..."
@@ -121,7 +138,11 @@ $(DISK_IMG): $(CALC_BIN) $(IMAGE_DIR)/make_tar_disk.py
 	@echo "Packing $@ (motd.txt, zircon.txt, calc.bin)..."
 	python3 $(IMAGE_DIR)/make_tar_disk.py
 
-run: $(KERNEL_IMG) $(DISK_IMG)
+run: all
+	@if ! command -v $(QEMU) >/dev/null 2>&1 && [ ! -x "$(QEMU)" ]; then \
+		echo "Error: '$(QEMU)' not found! Run './install_tools.sh' first."; \
+		exit 1; \
+	fi
 	@echo "Running ABOS Lesson 16 in QEMU..."
 	$(QEMU) -M virt -cpu cortex-a53 -smp 4 -kernel $(KERNEL_IMG) -nographic -serial mon:stdio \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0
