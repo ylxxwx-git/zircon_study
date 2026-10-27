@@ -64,7 +64,7 @@ int main(void) {
     } else {
         printf("Result: %ld %c %ld = %ld\n\n", a, op, b, res);
         dlog_printf("Result: %ld %c %ld = %ld", a, op, b, res);
-        printf("My Result: %ld\n\n", rst);
+        printf("My Result: %ld\n\n", res);
     }
 
     return 0;
