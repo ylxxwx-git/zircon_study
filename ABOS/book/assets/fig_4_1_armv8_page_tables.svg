@@ -74,10 +74,10 @@
   <path d="M 532 103 L 550 103" class="line"/>
   <path d="M 618 103 L 634 103" class="line"/>
 
-  <rect x="380" y="145" width="306" height="88" rx="5" class="box-cyan"/>
-  <text x="392" y="164" class="mono">• 0x0080_0000..0x0080_6000 : 24 KB User Stack (RW, UXN)</text>
-  <text x="392" y="182" class="mono">• 0x1000_0000..0x1FFF_FFFF : Dynamic VMAR Mappings</text>
-  <text x="392" y="200" class="mono">• 0x2000_0000+             : Standalone App (.bin, RWX)</text>
-  <text x="392" y="218" class="mono">• PTE_NG=1 : Zero TLB flush on context switch!</text>
+  <rect x="374" y="145" width="318" height="88" rx="5" class="box-cyan"/>
+  <text x="385" y="164" class="mono" style="font-size:9.3px">• 0x0080_0000..0x0080_6000 : 24 KB User Stack (RW, UXN)</text>
+  <text x="385" y="182" class="mono" style="font-size:9.3px">• 0x1000_0000..0x1FFF_FFFF : Dynamic VMAR Mappings</text>
+  <text x="385" y="200" class="mono" style="font-size:9.3px">• 0x2000_0000+             : Standalone App (.bin, RWX)</text>
+  <text x="385" y="218" class="mono" style="font-size:9.3px">• PTE_NG=1 : Zero TLB flush on context switch!</text>
 
 </svg>

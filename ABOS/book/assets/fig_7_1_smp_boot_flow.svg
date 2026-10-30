@@ -12,8 +12,8 @@
       .title { font-family: "Liberation Sans", Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #111827; }
       .lbl   { font-family: "Liberation Serif", Georgia, serif; font-size: 12px; fill: #111827; }
       .lbl-b { font-family: "Liberation Sans", Arial, sans-serif; font-size: 11.5px; font-weight: bold; fill: #111827; }
-      .mono  { font-family: "Liberation Mono", monospace; font-size: 10.5px; fill: #1f2937; }
-      .sub   { font-family: "Liberation Serif", Georgia, serif; font-size: 10.5px; fill: #374151; }
+      .mono  { font-family: "Liberation Mono", monospace; font-size: 9.4px; fill: #1f2937; }
+      .sub   { font-family: "Liberation Serif", Georgia, serif; font-size: 10.2px; fill: #374151; }
       .box-green  { fill: #bbf7d0; stroke: #14532d; stroke-width: 1.4; filter: url(#sh); }
       .box-blue   { fill: #bfdbfe; stroke: #1e3a8a; stroke-width: 1.4; filter: url(#sh); }
       .box-amber  { fill: #fde68a; stroke: #78350f; stroke-width: 1.4; filter: url(#sh); }

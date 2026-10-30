@@ -669,11 +669,11 @@ def convert_chapter_markdown_to_html(
             src_resolved = html.escape(resolve_img_src_for_html(img_m.group(2)))
             caption_html = format_inline(alt_raw) if alt_raw else ""
             i += 1
-            # Check if the immediately following line (or after 1 blank line) is an explicit italic/bold Figure caption
+            # Only absorb a standalone *Figure X-Y: ...* line if alt text had no caption
             look = i
             while look < n and not lines[look].strip():
                 look += 1
-            if look < n and re.match(r"^(?:\*+|\b)Figure\s+\d+", lines[look].strip()):
+            if look < n and re.match(r"^(\*{1,2})Figure\s+\d+[^*]+\1\s*$", lines[look].strip()):
                 cap_line = lines[look].strip()
                 cap_line = re.sub(r"^\*+|\*+$", "", cap_line).strip()
                 caption_html = format_inline(cap_line)
@@ -1042,8 +1042,8 @@ html, body {{
 /* --- Page 1: ECLK Homage Full-Bleed Cover --- */
 .cover-page {{
   page: cover_page;
-  width: 210mm;
-  height: 296.5mm;
+  width: 100%;
+  height: 100vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1073,7 +1073,7 @@ html, body {{
   margin: 0 0 8mm 0;
 }}
 .cover-photo-wrap {{
-  width: 210mm;
+  width: 100%;
   height: 146mm;
   overflow: hidden;
   border-top: 0.5pt solid #d0d7de;
@@ -1607,30 +1607,9 @@ def render_html_to_pdf(chrome_bin: str, html_path: str, pdf_path: str) -> None:
 
 
 def extract_page_markers(pdf_path: str) -> dict[int, int]:
-    """Extract {toc_idx: 1_based_pdf_page} from Pass-1 PDF using read_pdf_cli or pdftotext."""
+    """Extract {toc_idx: 1_based_pdf_page} from Pass-1 PDF using pdftotext or read_pdf_cli."""
     marker_re = re.compile(r"PGMK_(\d+)_END")
     page_map: dict[int, int] = {}
-
-    read_pdf_cli = "/google/bin/releases/gemini-agents-pdf-reader/read_pdf_cli"
-    if os.path.exists(read_pdf_cli):
-        res = subprocess.run(
-            [read_pdf_cli, f"--file={pdf_path}", "--text_only"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        cur_page = 0
-        for line in res.stdout.splitlines():
-            pm = re.match(r"^---\s*PAGE\s+(\d+)\s*---$", line.strip())
-            if pm:
-                cur_page = int(pm.group(1))
-                continue
-            if cur_page > 0:
-                for m in marker_re.finditer(line):
-                    idx = int(m.group(1))
-                    if idx not in page_map:
-                        page_map[idx] = cur_page
-        return page_map
 
     pdftotext_bin = shutil.which("pdftotext")
     if pdftotext_bin:
@@ -1648,7 +1627,31 @@ def extract_page_markers(pdf_path: str) -> dict[int, int]:
                     page_map[idx] = pg_idx
         return page_map
 
-    raise RuntimeError("Neither read_pdf_cli nor pdftotext is available to extract TOC page numbers.")
+    read_pdf_cli = "/google/bin/releases/gemini-agents-pdf-reader/read_pdf_cli"
+    if os.path.exists(read_pdf_cli):
+        try:
+            res = subprocess.run(
+                [read_pdf_cli, f"--file={pdf_path}", "--text_only"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            cur_page = 0
+            for line in res.stdout.splitlines():
+                pm = re.match(r"^---\s*PAGE\s+(\d+)\s*---$", line.strip())
+                if pm:
+                    cur_page = int(pm.group(1))
+                    continue
+                if cur_page > 0:
+                    for m in marker_re.finditer(line):
+                        idx = int(m.group(1))
+                        if idx not in page_map:
+                            page_map[idx] = cur_page
+            return page_map
+        except OSError:
+            pass
+
+    raise RuntimeError("Neither pdftotext nor read_pdf_cli is available to extract TOC page numbers.")
 
 
 def main() -> int:
