@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 235" width="720" height="235">
+
+  <defs>
+    <filter id="sh" x="-4%" y="-4%" width="112%" height="116%">
+      <feDropShadow dx="2.5" dy="2.5" stdDeviation="1.2" flood-color="#9aa3ad" flood-opacity="0.65"/>
+    </filter>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .frame { fill: #ffffff; stroke: #111827; stroke-width: 1.5; }
+      .title { font-family: "Liberation Sans", Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #111827; }
+      .lbl   { font-family: "Liberation Serif", Georgia, serif; font-size: 12px; fill: #111827; }
+      .lbl-b { font-family: "Liberation Sans", Arial, sans-serif; font-size: 11.5px; font-weight: bold; fill: #111827; }
+      .mono  { font-family: "Liberation Mono", monospace; font-size: 10.5px; fill: #1f2937; }
+      .sub   { font-family: "Liberation Serif", Georgia, serif; font-size: 10.5px; fill: #374151; }
+      .box-green  { fill: #bbf7d0; stroke: #14532d; stroke-width: 1.4; filter: url(#sh); }
+      .box-blue   { fill: #bfdbfe; stroke: #1e3a8a; stroke-width: 1.4; filter: url(#sh); }
+      .box-amber  { fill: #fde68a; stroke: #78350f; stroke-width: 1.4; filter: url(#sh); }
+      .box-pink   { fill: #fbcfe8; stroke: #831843; stroke-width: 1.4; filter: url(#sh); }
+      .box-purple { fill: #e9d5ff; stroke: #4c1d95; stroke-width: 1.4; filter: url(#sh); }
+      .box-cyan   { fill: #bae6fd; stroke: #0c4a6e; stroke-width: 1.4; filter: url(#sh); }
+      .box-gray   { fill: #e5e7eb; stroke: #374151; stroke-width: 1.3; }
+      .dash-group { fill: #f8fafc; stroke: #334155; stroke-width: 1.2; stroke-dasharray: 5,4; }
+      .line  { stroke: #1f2937; stroke-width: 1.5; fill: none; marker-end: url(#arr); }
+      .bline { stroke: #1f2937; stroke-width: 1.5; fill: none; marker-start: url(#arr); marker-end: url(#arr); }
+      .dline { stroke: #475569; stroke-width: 1.3; stroke-dasharray: 4,3; fill: none; marker-end: url(#arr); }
+    </style>
+  </defs>
+
+  <rect x="2" y="2" width="716" height="231" class="frame"/>
+
+  <text x="360" y="25" text-anchor="middle" class="title">The Three Hardware Stack Regimes in ABOS (SP_EL1 Boot/Idle, SP_EL1 Thread, SP_EL0 User)</text>
+  <rect x="24" y="45" width="210" height="170" rx="6" class="box-purple"/>
+  <text x="129" y="66" text-anchor="middle" class="lbl-b">1. Per-CPU Boot / Idle Stack</text>
+  <text x="129" y="84" text-anchor="middle" class="mono">Reg: SP_EL1 (EL1h)</text>
+  <text x="36" y="106" class="sub">• Static in kernel .bss (linker.ld)</text>
+  <text x="36" y="124" class="sub">• 8 KB × 4 CPUs = 32 KB total</text>
+  <text x="36" y="142" class="sub">• SP = _stack_top - (cpu &lt;&lt; 13)</text>
+  <text x="36" y="160" class="sub">• Runs lk_main &amp; idle wfi loop</text>
+  <text x="36" y="178" class="sub">• Reaps dead thread stacks!</text>
+
+  <rect x="255" y="45" width="210" height="170" rx="6" class="box-blue"/>
+  <text x="360" y="66" text-anchor="middle" class="lbl-b">2. Per-Thread Kernel Stack</text>
+  <text x="360" y="84" text-anchor="middle" class="mono">Reg: SP_EL1 (EL1h)</text>
+  <text x="267" y="106" class="sub">• Dynamic: 2 contiguous PMM pages</text>
+  <text x="267" y="124" class="sub">• 8 KB in Higher-Half Physmap</text>
+  <text x="267" y="142" class="sub">• Holds 288B iframe_t on SVC/IRQ</text>
+  <text x="267" y="160" class="sub">• Holds 112B context_switch_frame</text>
+  <text x="267" y="178" class="sub">• Freed by thread_reap_dead()</text>
+
+  <rect x="486" y="45" width="210" height="170" rx="6" class="box-green"/>
+  <text x="591" y="66" text-anchor="middle" class="lbl-b">3. Per-Process User Stack</text>
+  <text x="591" y="84" text-anchor="middle" class="mono">Reg: SP_EL0 (EL0t)</text>
+  <text x="498" y="106" class="sub">• Dynamic: 6 PMM pages (24 KB)</text>
+  <text x="498" y="124" class="sub">• VA 0x0080_0000 .. 0x0080_6000</text>
+  <text x="498" y="142" class="sub">• Mapped USER | RW | UXN | PXN</text>
+  <text x="498" y="160" class="sub">• Unmapped 0x0 guard below</text>
+  <text x="498" y="178" class="sub">• Freed in process_destroy()</text>
+
+</svg>

@@ -8,6 +8,25 @@
 #define USER_KVA_TO_UVA(kva) ((vaddr_t)((uintptr_t)(kva) - 0xFFFFFFFF80000000ULL))
 
 /* =========================================================================
+ * Bootstrap Handle Type Tags (modeled after Zircon's PA_* processargs)
+ * ========================================================================= */
+#define AB_PA_NONE        0U
+#define AB_PA_LOG         1U
+#define AB_PA_VMAR_ROOT   2U
+#define AB_PA_CONSOLE     3U
+#define AB_PA_FS          4U
+#define AB_PA_JOB_DEFAULT 5U
+#define AB_PA_RESOURCE    6U
+#define AB_PA_CHANNEL_SRV 7U
+
+#define AB_PROC_ARGS_MAGIC 0x41425041U /* "ABPA" */
+
+typedef struct {
+    uint32_t magic;
+    uint8_t  handle_types[8];
+} ab_proc_args_t;
+
+/* =========================================================================
  * IPC Protocol Definitions between Shell <-> Console Server & FS Server
  * ========================================================================= */
 #define NUM_VTS           4U

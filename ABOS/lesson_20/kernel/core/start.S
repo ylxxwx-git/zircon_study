@@ -7,6 +7,7 @@
 
 .equ MAIR_VALUE, 0x000000000000FF00 /* Attr0=Device-nGnRnE, Attr1=Normal-WBWA */
 .equ TCR_VALUE,  0x00000000B5213521 /* T0SZ=33, T1SZ=33 (2GB), 4KB granules, ISH WBWA */
+.equ PTE_NG_BIT, (1 << 11)          /* Non-Global bit for temporary TTBR0 idmap entries */
 .equ PTE_DEVICE, (0x401 | (0 << 2) | (1 << 53) | (1 << 54)) /* 1GB Block, Device, AF, PXN, UXN */
 .equ PTE_RAM,    (0x401 | (1 << 2) | (3 << 8))              /* 1GB Block, Normal, AF, ISH */
 
@@ -51,12 +52,12 @@ _start:
 
     /* Primary CPU builds initial 1GB block page tables in .idmap.data */
     adr     x0, idmap_table
-    /* idmap_table[0]: VA 0x00000000 -> PA 0x00000000 (Device) */
-    ldr     x2, =PTE_DEVICE
+    /* idmap_table[0]: VA 0x00000000 -> PA 0x00000000 (Device, Non-Global) */
+    ldr     x2, =(PTE_DEVICE | PTE_NG_BIT)
     str     x2, [x0, #0]
-    /* idmap_table[1]: VA 0x40000000 -> PA 0x40000000 (RAM) */
+    /* idmap_table[1]: VA 0x40000000 -> PA 0x40000000 (RAM, Non-Global) */
     ldr     x1, =0x40000000
-    ldr     x2, =PTE_RAM
+    ldr     x2, =(PTE_RAM | PTE_NG_BIT)
     orr     x2, x1, x2
     str     x2, [x0, #8]
 
@@ -90,7 +91,13 @@ _start:
     msr     mair_el1, x0
 
     ldr     x0, =TCR_VALUE
-    msr     tcr_el1, x0
+    /* Enable 16-bit ASIDs (TCR_EL1.AS = bit 36) if supported by the CPU */
+    mrs     x1, id_aa64mmfr0_el1
+    ubfx    x1, x1, #4, #4
+    cmp     x1, #2
+    b.ne    1f
+    orr     x0, x0, #(1 << 36)
+1:  msr     tcr_el1, x0
 
     adr     x0, idmap_table
     msr     ttbr0_el1, x0
@@ -103,8 +110,11 @@ _start:
     dsb     ish
     isb
 
-    /* Enable MMU (SCTLR_EL1.M = 1) */
-    mov     x0, #1
+    /* Enable MMU + Data Cache + Instruction Cache (preserving RES1 bits) */
+    mrs     x0, sctlr_el1
+    orr     x0, x0, #(1 << 0)   /* SCTLR_EL1.M: MMU enable */
+    orr     x0, x0, #(1 << 2)   /* SCTLR_EL1.C: Data/unified cache enable */
+    orr     x0, x0, #(1 << 12)  /* SCTLR_EL1.I: Instruction cache enable */
     msr     sctlr_el1, x0
     isb
 

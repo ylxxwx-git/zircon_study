@@ -14,7 +14,8 @@ void wait_queue_init(wait_queue_t *wq) {
     wq->count = 0;
 }
 
-static void wq_remove_thread_locked(wait_queue_t *wq, thread_t *target) {
+void wait_queue_remove_thread_locked(wait_queue_t *wq, thread_t *target) {
+    if (!wq || !target) return;
     thread_t *prev = NULL;
     thread_t *curr = wq->head;
     while (curr) {
@@ -27,13 +28,15 @@ static void wq_remove_thread_locked(wait_queue_t *wq, thread_t *target) {
             if (wq->tail == curr) {
                 wq->tail = prev;
             }
-            curr->wait_next = NULL;
+            curr->wait_next   = NULL;
+            curr->blocking_wq = NULL;
             if (wq->count > 0) wq->count--;
             return;
         }
         prev = curr;
         curr = curr->wait_next;
     }
+    target->blocking_wq = NULL;
 }
 
 int wait_queue_block_locked(wait_queue_t *wq, ab_time_t deadline_ns) {
@@ -45,6 +48,7 @@ int wait_queue_block_locked(wait_queue_t *wq, ab_time_t deadline_ns) {
 
     cur->wait_status  = AB_OK;
     cur->wake_time_ns = deadline_ns;
+    cur->blocking_wq  = wq;
     cur->wait_next    = NULL;
     cur->state        = THREAD_BLOCKED;
 
@@ -59,7 +63,7 @@ int wait_queue_block_locked(wait_queue_t *wq, ab_time_t deadline_ns) {
     sched_reschedule_locked();
 
     /* If woken by timer timeout, ensure we are removed from wq */
-    wq_remove_thread_locked(wq, cur);
+    wait_queue_remove_thread_locked(wq, cur);
     return cur->wait_status;
 }
 
@@ -68,7 +72,8 @@ int wait_queue_wake_one_locked(wait_queue_t *wq, int wait_status) {
         thread_t *t = wq->head;
         wq->head = t->wait_next;
         if (!wq->head) wq->tail = NULL;
-        t->wait_next = NULL;
+        t->wait_next   = NULL;
+        t->blocking_wq = NULL;
         if (wq->count > 0) wq->count--;
 
         if (t->state == THREAD_BLOCKED) {

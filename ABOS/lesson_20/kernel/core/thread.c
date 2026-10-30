@@ -6,6 +6,7 @@
  *   - zircon_org/kernel/arch/arm64/thread.cpp
  * ========================================================================= */
 #include "thread.h"
+#include "wait.h"
 #include "spinlock.h"
 #include "heap.h"
 #include "pmm.h"
@@ -73,12 +74,59 @@ void thread_secondary_cpu_init(void) {
     current_threads[cpu] = &idle_threads[cpu];
 }
 
+void thread_detach(thread_t *t) {
+    if (!t) return;
+    uint64_t irqstate;
+    spin_lock_irqsave(&sched_lock, &irqstate);
+    t->thread_obj  = NULL;
+    t->process_obj = NULL;
+    t->detached    = 1;
+    spin_lock_irqrestore(&sched_lock, irqstate);
+}
+
+void thread_reap_dead(void) {
+    for (;;) {
+        thread_t *victim = NULL;
+        uint64_t irqstate;
+        spin_lock_irqsave(&sched_lock, &irqstate);
+
+        for (int i = 0; i < MAX_THREADS; i++) {
+            thread_t *t = thread_table[i];
+            if (!t || t->state != THREAD_DEATH || !t->detached) continue;
+
+            int on_cpu = 0;
+            for (uint32_t c = 0; c < SMP_MAX_CPUS; c++) {
+                if (current_threads[c] == t) {
+                    on_cpu = 1;
+                    break;
+                }
+            }
+            if (!on_cpu) {
+                thread_table[i] = NULL;
+                victim = t;
+                break;
+            }
+        }
+
+        spin_lock_irqrestore(&sched_lock, irqstate);
+        if (!victim) break;
+
+        paddr_t stack_pa = physmap_to_paddr((const void *)victim->stack_base);
+        for (size_t off = 0; off < victim->stack_size; off += PAGE_SIZE) {
+            pmm_free_page(stack_pa + off);
+        }
+        kfree(victim);
+    }
+}
+
 thread_t *thread_create(const char *name, thread_start_routine entry, void *arg) {
+    thread_reap_dead();
+
     thread_t *t = (thread_t *)kzalloc(sizeof(thread_t));
     if (!t) return NULL;
 
     paddr_t stack_pa = 0;
-    if (!pmm_alloc_contiguous(THREAD_STACK_SIZE / PAGE_SIZE, VM_PAGE_STATE_WIRED, &stack_pa)) {
+    if (!pmm_alloc_contiguous(THREAD_STACK_SIZE / PAGE_SIZE, VM_PAGE_STATE_ALLOC, &stack_pa)) {
         kfree(t);
         return NULL;
     }
@@ -90,7 +138,9 @@ thread_t *thread_create(const char *name, thread_start_routine entry, void *arg)
     t->state       = THREAD_INITIAL;
     t->pinned_cpu  = -1;
     t->aspace      = NULL;
+    t->blocking_wq = NULL;
     t->wait_next   = NULL;
+    t->detached    = 1;
     copy_name(t->name, name ? name : "kthread", sizeof(t->name));
 
     /* Set up initial context_switch_frame_t at the top of the 8KB stack */
@@ -117,6 +167,9 @@ thread_t *thread_create(const char *name, thread_start_routine entry, void *arg)
     spin_lock_irqrestore(&sched_lock, irqstate);
 
     if (!placed) {
+        for (size_t off = 0; off < THREAD_STACK_SIZE; off += PAGE_SIZE) {
+            pmm_free_page(stack_pa + off);
+        }
         kfree(t);
         return NULL;
     }
@@ -240,8 +293,11 @@ void thread_timer_tick(void) {
             __asm__ volatile("sev");
         } else if (t->state == THREAD_BLOCKED && t->wake_time_ns != 0 && now >= t->wake_time_ns) {
             /* Timed wait_queue wakeup (used in Lesson 06+) */
+            if (t->blocking_wq) {
+                wait_queue_remove_thread_locked(t->blocking_wq, t);
+            }
             t->wake_time_ns = 0;
-            t->wait_status  = -1; /* AB_ERR_TIMED_OUT */
+            t->wait_status  = AB_ERR_TIMED_OUT;
             t->state        = THREAD_READY;
             __asm__ volatile("sev");
         }
@@ -254,6 +310,7 @@ void thread_timer_tick(void) {
 void thread_become_idle(void) {
     arch_enable_ints();
     for (;;) {
+        thread_reap_dead();
         thread_yield();
         __asm__ volatile("wfi");
     }

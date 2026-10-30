@@ -23,7 +23,6 @@
 
 extern char _end[];
 extern void _start(void);
-extern uint16_t ab_alloc_asid(void);
 
 static volatile uint32_t secondary_cpu_ready_count = 0;
 
@@ -85,16 +84,22 @@ void lk_main(uint64_t dtb_paddr) {
     ab_resource_dispatcher_create(0, &root_res);
 
     /* Create BOOTFS VMO from the QEMU -initrd RAM disk discovered via DTB */
+    if (boot_info.initrd_end <= boot_info.initrd_start) {
+        dprintf(CRITICAL, "[bootfs] PANIC: No BOOTFS initrd found in DTB! Pass -initrd image/bootfs.tar to QEMU.\n");
+        for (;;) __asm__ volatile("wfe");
+    }
     size_t bootfs_sz = (size_t)(boot_info.initrd_end - boot_info.initrd_start);
     const void *bootfs_kva = paddr_to_physmap(boot_info.initrd_start);
     ab_object_t *bootfs_vmo = NULL;
-    ab_vmo_dispatcher_create(bootfs_sz, 0, &bootfs_vmo);
-    {
-        ab_vmo_dispatcher_t *v = (ab_vmo_dispatcher_t *)bootfs_vmo;
-        const char *bname = "bootfs.tar";
-        for (size_t i = 0; i < 11; i++) v->name[i] = bname[i];
+    if (ab_vmo_dispatcher_create(bootfs_sz, 0, &bootfs_vmo) != AB_OK || !bootfs_vmo) {
+        dprintf(CRITICAL, "[bootfs] PANIC: Failed to create BOOTFS VMO (%lu bytes)!\n",
+                (unsigned long)bootfs_sz);
+        for (;;) __asm__ volatile("wfe");
     }
+    ab_object_set_name(bootfs_vmo, "bootfs.tar", 10);
     ab_vmo_write(bootfs_vmo, bootfs_kva, 0, bootfs_sz);
+    /* Reclaim the bootloader initrd physical pages now that BOOTFS is in its VMO */
+    pmm_free_wired_range(boot_info.initrd_start, boot_info.initrd_end);
     dprintf(INFO, "[bootfs] Created BOOTFS VMO (koid=%lu, %lu bytes from initrd PA %p) for userboot\n",
             bootfs_vmo->koid, (unsigned long)bootfs_sz, (void *)boot_info.initrd_start);
 
@@ -108,12 +113,13 @@ void lk_main(uint64_t dtb_paddr) {
     ab_object_t *ch0 = NULL, *ch1 = NULL;
     ab_channel_dispatcher_create(&ch0, &ch1);
 
+    ab_rights_t bootfs_ro_rights = AB_RIGHTS_BASIC | AB_RIGHT_READ | AB_RIGHT_MAP;
     ab_handle_t job_h = 0, log_h = 0, res_h = 0, ub_vmar_h = 0, bootfs_h = 0, ch1_h = 0;
     handle_alloc(userboot_proc, root_job,   AB_RIGHTS_DEFAULT_JOB,      &job_h);
     handle_alloc(userboot_proc, root_log,   AB_RIGHTS_DEFAULT_LOG,      &log_h);
     handle_alloc(userboot_proc, root_res,   AB_RIGHTS_DEFAULT_RESOURCE, &res_h);
     handle_alloc(userboot_proc, ub_vmar,    AB_RIGHTS_DEFAULT_VMAR,     &ub_vmar_h);
-    handle_alloc(userboot_proc, bootfs_vmo, AB_RIGHTS_DEFAULT_VMO,      &bootfs_h);
+    handle_alloc(userboot_proc, bootfs_vmo, bootfs_ro_rights,           &bootfs_h);
     handle_alloc(userboot_proc, ch1,        AB_RIGHTS_DEFAULT_CHANNEL,  &ch1_h);
 
     ab_handle_t boot_h[5] = { job_h, log_h, res_h, ub_vmar_h, bootfs_h };
@@ -130,12 +136,15 @@ void lk_main(uint64_t dtb_paddr) {
 
     ab_process_start_user(NULL, userboot_proc, (ab_thread_dispatcher_t *)ub_thr,
                           USER_KVA_TO_UVA(userboot_entry), 0, ch1_h, 0);
+    ab_object_release(&userboot_proc->base);
 
     arch_enable_ints();
-    while (((ab_thread_dispatcher_t *)ub_thr)->kthread->state != THREAD_DEATH) {
+    while (((ab_thread_dispatcher_t *)ub_thr)->kthread &&
+           ((ab_thread_dispatcher_t *)ub_thr)->kthread->state != THREAD_DEATH) {
         thread_yield();
         __asm__ volatile("wfi");
     }
+    ab_object_release(ub_thr);
 
     dprintf(INFO, "[lk_main] ABOS Lesson 20 complete!\n");
     thread_become_idle();

@@ -57,7 +57,9 @@ typedef struct thread {
     int                  retcode;
     ab_time_t            wake_time_ns;   /* Deadline for SLEEPING / timed BLOCKED */
     int                  wait_status;    /* Status returned when woken from wait_queue */
+    struct wait_queue   *blocking_wq;    /* Wait queue this thread is currently on */
     struct thread       *wait_next;      /* Intrusive link inside wait_queue_t */
+    int                  detached;       /* 1 = ready for kernel stack/struct reaping on DEATH */
     vm_aspace_t         *aspace;         /* NULL for kernel threads; user VmAspace for EL0 */
     void                *process_obj;    /* ProcessDispatcher pointer (Lesson 07+) */
     void                *thread_obj;     /* ThreadDispatcher pointer (Lesson 07+) */
@@ -69,6 +71,8 @@ void thread_init_early(void);
 void thread_secondary_cpu_init(void);
 thread_t *get_current_thread(void);
 thread_t *thread_create(const char *name, thread_start_routine entry, void *arg);
+void thread_detach(thread_t *t);
+void thread_reap_dead(void);
 void thread_set_pinned_cpu(thread_t *t, int cpu);
 void thread_resume(thread_t *t);
 void thread_yield(void);

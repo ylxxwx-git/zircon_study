@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "pmm.h"
+#include "spinlock.h"
 
 typedef uint64_t vaddr_t;
 typedef uint64_t pte_t;
@@ -63,13 +64,16 @@ static inline void *paddr_to_periphmap(paddr_t pa) {
 #define USER_ASPACE_SIZE        0x000000007FFFF000ULL
 
 typedef struct vm_aspace {
-    paddr_t  ttbr0_phys;    /* Physical address of L1 page table */
-    pte_t   *l1_virt;       /* Kernel physmap pointer to L1 table */
-    uint16_t asid;
-    uint32_t mapped_pages;
+    spin_lock_t lock;
+    paddr_t     ttbr0_phys;    /* Physical address of L1 page table */
+    pte_t      *l1_virt;       /* Kernel physmap pointer to L1 table */
+    uint16_t    asid;
+    uint32_t    mapped_pages;
 } vm_aspace_t;
 
 void mmu_init(void);
+uint16_t ab_alloc_asid(void);
+void ab_free_asid(uint16_t asid);
 vm_aspace_t *vmm_create_user_aspace(uint16_t asid);
 int vmm_map_page(vm_aspace_t *aspace, vaddr_t vaddr, paddr_t paddr, uint32_t flags);
 int vmm_unmap_page(vm_aspace_t *aspace, vaddr_t vaddr);

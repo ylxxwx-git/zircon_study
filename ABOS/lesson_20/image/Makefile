@@ -56,4 +56,4 @@ $(DISK_IMG): $(APP_BINS) make_tar_disk.py
 	@python3 make_tar_disk.py
 
 clean:
-	@rm -f $(BOOTFS_TAR) $(KERNEL_ELF) $(KERNEL_IMG) $(DISK_IMG) *.elf *.bin
+	@rm -f $(BOOTFS_TAR) $(KERNEL_ELF) $(KERNEL_IMG) $(DISK_IMG) *.elf *.bin *.o

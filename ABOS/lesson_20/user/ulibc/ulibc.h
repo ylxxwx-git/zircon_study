@@ -57,6 +57,7 @@ ab_status_t sys_vmo_write(ab_handle_t vmo_h, const void *buf, uint64_t offset, s
 ab_status_t sys_vmar_map(ab_handle_t vmar_h, uint64_t vmar_offset,
                          ab_handle_t vmo_h, uint64_t vmo_offset,
                          uint64_t len, uint32_t perms, vaddr_t *out_va);
+ab_status_t sys_vmar_unmap(ab_handle_t vmar_h, vaddr_t addr, uint64_t len);
 
 /* Tasks: Jobs, Processes & Threads */
 ab_status_t sys_process_create(ab_handle_t job_h, const char *name,
@@ -89,9 +90,11 @@ void        __ulibc_init(ab_handle_t boot_ch, uint64_t arg1);
 int         main(void);
 
 ab_handle_t ulibc_get_startup_handle(uint32_t index);
+ab_handle_t ulibc_get_startup_handle_by_type(uint8_t pa_type);
 uint64_t    ulibc_get_startup_arg1(void);
 ab_handle_t ulibc_get_log_handle(void);
 ab_handle_t ulibc_get_console_handle(void);
+ab_time_t   ulibc_clock_get_monotonic(void);
 
 /* Standard Console & DebugLog I/O for standalone apps (initialized by crt0) */
 void        u_puts(const char *s);

@@ -1,5 +1,5 @@
 # =========================================================================
-# config.mk - Shared Toolchain & Build Configuration for ABOS Lesson 19
+# config.mk - Shared Toolchain & Build Configuration for ABOS Lesson 20
 #
 # Included by the top-level Makefile and every subdirectory Makefile.
 # =========================================================================

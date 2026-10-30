@@ -3,9 +3,12 @@
  * ========================================================================= */
 #include "object.h"
 #include "heap.h"
+#include "pmm.h"
 #include "debuglog.h"
 
 static volatile uint64_t global_koid_counter = 1024ULL;
+static spin_lock_t g_peer_lock = SPIN_LOCK_INITIAL_VALUE;
+static spin_lock_t g_job_lock  = SPIN_LOCK_INITIAL_VALUE;
 
 ab_koid_t ab_koid_alloc(void) {
     return __atomic_fetch_add(&global_koid_counter, 1ULL, __ATOMIC_RELAXED);
@@ -198,10 +201,83 @@ ab_process_t *get_current_process(void) {
     return cur ? (ab_process_t *)cur->process_obj : NULL;
 }
 
+static void process_on_zero_handles(ab_object_t *obj) {
+    ab_process_t *proc = (ab_process_t *)obj;
+    int has_started = 0;
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&g_job_lock, &irqstate);
+    for (uint32_t t = 0; t < MAX_THREADS_PER_PROCESS; t++) {
+        if (proc->threads[t] && proc->threads[t]->kthread != NULL) {
+            has_started = 1;
+            break;
+        }
+    }
+    spin_lock_irqrestore(&g_job_lock, irqstate);
+
+    /* If a process was never started and all handles to it closed, detach from job */
+    if (!has_started || proc->exited) {
+        ab_job_remove_process(proc);
+    }
+}
+
+static void process_destroy(ab_object_t *obj) {
+    ab_process_t *proc = (ab_process_t *)obj;
+    dprintf(SPEW, "[object] Destroying PROCESS '%s' (koid=%lu)\n",
+            proc->name, proc->base.koid);
+
+    /* Unmap and release any remaining VMAR mappings */
+    for (uint32_t i = 0; i < MAX_VMAR_MAPPINGS; i++) {
+        if (proc->mappings[i].active) {
+            if (proc->aspace) {
+                for (size_t off = 0; off < proc->mappings[i].size; off += PAGE_SIZE) {
+                    vmm_unmap_page(proc->aspace, proc->mappings[i].base_va + off);
+                }
+            }
+            if (proc->mappings[i].vmo) {
+                ab_object_release(&proc->mappings[i].vmo->base);
+                proc->mappings[i].vmo = NULL;
+            }
+            proc->mappings[i].active = 0;
+        }
+    }
+
+    /* Close any remaining open handles */
+    for (uint32_t slot = 0; slot < MAX_HANDLES_PER_PROCESS; slot++) {
+        if (proc->handles[slot].obj != NULL) {
+            ab_handle_t h = make_handle_value(slot, proc->handles[slot].generation);
+            handle_close(proc, h);
+        }
+    }
+
+    /* Free EL0 user stack physical pages before tearing down page tables */
+    if (proc->aspace && proc->stack_size > 0) {
+        for (size_t off = 0; off < proc->stack_size; off += PAGE_SIZE) {
+            paddr_t pa = 0;
+            if (vmm_resolve_vaddr(proc->aspace, proc->stack_va + off, &pa, NULL) == 0 && pa != 0) {
+                vmm_unmap_page(proc->aspace, proc->stack_va + off);
+                pmm_free_page(pa);
+            }
+        }
+        proc->stack_size = 0;
+    }
+
+    if (proc->aspace) {
+        vmm_destroy_aspace(proc->aspace);
+        proc->aspace = NULL;
+    }
+
+    kfree(proc);
+}
+
 ab_process_t *ab_process_create_kernel(const char *name, uint16_t asid) {
+    if (asid == 0) return NULL;
     ab_process_t *proc = (ab_process_t *)ab_object_alloc(
-        sizeof(ab_process_t), AB_OBJ_TYPE_PROCESS, AB_SIGNAL_NONE, NULL, NULL);
-    if (!proc) return NULL;
+        sizeof(ab_process_t), AB_OBJ_TYPE_PROCESS, AB_SIGNAL_NONE,
+        process_on_zero_handles, process_destroy);
+    if (!proc) {
+        ab_free_asid(asid);
+        return NULL;
+    }
 
     size_t i = 0;
     while (name && name[i] && i + 1 < sizeof(proc->name)) {
@@ -210,8 +286,15 @@ ab_process_t *ab_process_create_kernel(const char *name, uint16_t asid) {
     }
     proc->name[i] = '\0';
 
+    proc->parent_job = NULL;
     proc->aspace = vmm_create_user_aspace(asid);
+    if (!proc->aspace) {
+        ab_free_asid(asid);
+        ab_object_release(&proc->base);
+        return NULL;
+    }
     proc->handle_lock.value = 0;
+    proc->vmar_lock.value   = 0;
     for (int s = 0; s < MAX_HANDLES_PER_PROCESS; s++) {
         proc->handles[s].obj        = NULL;
         proc->handles[s].rights     = 0;
@@ -396,16 +479,15 @@ ab_status_t ab_event_dispatcher_create(uint32_t options, ab_object_t **out_obj) 
 static void eventpair_on_zero_handles(ab_object_t *obj) {
     ab_eventpair_dispatcher_t *self = (ab_eventpair_dispatcher_t *)obj;
     spin_lock_saved_state_t irqstate;
-    spin_lock_irqsave(&self->peer_lock, &irqstate);
+    spin_lock_irqsave(&g_peer_lock, &irqstate);
     ab_eventpair_dispatcher_t *peer = self->peer;
-    self->peer = NULL;
-    spin_lock_irqrestore(&self->peer_lock, irqstate);
+    if (peer) {
+        self->peer = NULL;
+        peer->peer = NULL;
+    }
+    spin_lock_irqrestore(&g_peer_lock, irqstate);
 
     if (peer) {
-        spin_lock_irqsave(&peer->peer_lock, &irqstate);
-        peer->peer = NULL;
-        spin_lock_irqrestore(&peer->peer_lock, irqstate);
-
         dprintf(INFO, "[eventpair] Endpoint (koid=%lu) closed -> asserting AB_SIGNAL_PEER_CLOSED on peer (koid=%lu)\n",
                 self->base.koid, peer->base.koid);
         state_tracker_update_signals(&peer->base, 0, AB_SIGNAL_PEER_CLOSED);
@@ -447,12 +529,12 @@ ab_status_t ab_eventpair_signal_peer(ab_object_t *obj,
                                      ab_signals_t set_mask) {
     ab_eventpair_dispatcher_t *self = (ab_eventpair_dispatcher_t *)obj;
     spin_lock_saved_state_t irqstate;
-    spin_lock_irqsave(&self->peer_lock, &irqstate);
+    spin_lock_irqsave(&g_peer_lock, &irqstate);
     ab_eventpair_dispatcher_t *peer = self->peer;
     if (peer) {
         ab_object_add_ref(&peer->base);
     }
-    spin_lock_irqrestore(&self->peer_lock, irqstate);
+    spin_lock_irqrestore(&g_peer_lock, irqstate);
 
     if (!peer) {
         return AB_ERR_PEER_CLOSED;
@@ -460,7 +542,6 @@ ab_status_t ab_eventpair_signal_peer(ab_object_t *obj,
 
     state_tracker_update_signals(&peer->base, clear_mask, set_mask);
     ab_object_release(&peer->base);
-        ab_object_release(&self->base);
     return AB_OK;
 }
 
@@ -699,16 +780,15 @@ static void channel_destroy(ab_object_t *obj) {
 static void channel_on_zero_handles(ab_object_t *obj) {
     ab_channel_dispatcher_t *self = (ab_channel_dispatcher_t *)obj;
     spin_lock_saved_state_t irqstate;
-    spin_lock_irqsave(&self->lock, &irqstate);
+    spin_lock_irqsave(&g_peer_lock, &irqstate);
     ab_channel_dispatcher_t *peer = self->peer;
-    self->peer = NULL;
-    spin_lock_irqrestore(&self->lock, irqstate);
+    if (peer) {
+        self->peer = NULL;
+        peer->peer = NULL;
+    }
+    spin_lock_irqrestore(&g_peer_lock, irqstate);
 
     if (peer) {
-        spin_lock_irqsave(&peer->lock, &irqstate);
-        peer->peer = NULL;
-        spin_lock_irqrestore(&peer->lock, irqstate);
-
         state_tracker_update_signals(&peer->base, AB_SIGNAL_WRITABLE, AB_SIGNAL_PEER_CLOSED);
         ab_object_release(&peer->base);
         ab_object_release(&self->base);
@@ -756,10 +836,10 @@ ab_status_t ab_channel_write(ab_process_t *sender_proc, ab_object_t *ch_obj,
 
     ab_channel_dispatcher_t *self = (ab_channel_dispatcher_t *)ch_obj;
     spin_lock_saved_state_t irqstate;
-    spin_lock_irqsave(&self->lock, &irqstate);
+    spin_lock_irqsave(&g_peer_lock, &irqstate);
     ab_channel_dispatcher_t *peer = self->peer;
     if (peer) ab_object_add_ref(&peer->base);
-    spin_lock_irqrestore(&self->lock, irqstate);
+    spin_lock_irqrestore(&g_peer_lock, irqstate);
 
     if (!peer) return AB_ERR_PEER_CLOSED;
 
@@ -819,8 +899,10 @@ ab_status_t ab_channel_read(ab_process_t *receiver_proc, ab_object_t *ch_obj,
 
     ab_message_packet_t *pkt = self->msg_head;
     if (!pkt) {
-        int peer_closed = (self->peer == NULL);
         spin_lock_irqrestore(&self->lock, irqstate);
+        spin_lock_irqsave(&g_peer_lock, &irqstate);
+        int peer_closed = (self->peer == NULL);
+        spin_lock_irqrestore(&g_peer_lock, irqstate);
         return peer_closed ? AB_ERR_PEER_CLOSED : AB_ERR_SHOULD_WAIT;
     }
 
@@ -830,6 +912,11 @@ ab_status_t ab_channel_read(ab_process_t *receiver_proc, ab_object_t *ch_obj,
     if (pkt->num_bytes > max_bytes || pkt->num_handles > max_handles) {
         spin_lock_irqrestore(&self->lock, irqstate);
         return AB_ERR_BUFFER_TOO_SMALL;
+    }
+
+    if ((pkt->num_bytes > 0 && !bytes) || (pkt->num_handles > 0 && (!handles || !receiver_proc))) {
+        spin_lock_irqrestore(&self->lock, irqstate);
+        return AB_ERR_INVALID_ARGS;
     }
 
     self->msg_head = pkt->next;
@@ -845,15 +932,21 @@ ab_status_t ab_channel_read(ab_process_t *receiver_proc, ab_object_t *ch_obj,
         dst[i] = pkt->data[i];
     }
 
-    /* Install transferred capabilities into the receiver process's handle table! */
+    /* Install transferred capabilities into the receiver process's handle table */
     for (uint32_t i = 0; i < pkt->num_handles; i++) {
         ab_handle_t new_h = AB_HANDLE_INVALID;
         ab_status_t st = handle_install_transferred(receiver_proc, pkt->objs[i],
                                                     pkt->rights[i], &new_h);
-        if (st == AB_OK) {
-            handles[i]   = new_h;
-            pkt->objs[i] = NULL; /* Ownership transferred to receiver handle table */
+        if (st != AB_OK) {
+            for (uint32_t j = 0; j < i; j++) {
+                handle_close(receiver_proc, handles[j]);
+                handles[j] = AB_HANDLE_INVALID;
+            }
+            message_packet_destroy(pkt);
+            return st;
         }
+        handles[i]   = new_h;
+        pkt->objs[i] = NULL; /* Ownership transferred to receiver handle table */
     }
 
     message_packet_destroy(pkt);
@@ -926,50 +1019,79 @@ ab_status_t ab_vmo_get_or_alloc_page(ab_vmo_dispatcher_t *vmo, uint32_t page_idx
 }
 
 ab_status_t ab_vmo_read(ab_object_t *vmo_obj, void *buf, uint64_t offset, size_t len) {
-    if (!vmo_obj || vmo_obj->type != AB_OBJ_TYPE_VMO || !buf) return AB_ERR_INVALID_ARGS;
+    if (!vmo_obj || vmo_obj->type != AB_OBJ_TYPE_VMO) return AB_ERR_INVALID_ARGS;
+    if (len == 0) return AB_OK;
+    if (!buf) return AB_ERR_INVALID_ARGS;
     ab_vmo_dispatcher_t *vmo = (ab_vmo_dispatcher_t *)vmo_obj;
-    if (offset + len > vmo->size_bytes) return AB_ERR_OUT_OF_RANGE;
+    if (offset > vmo->size_bytes || len > vmo->size_bytes - offset) {
+        return AB_ERR_OUT_OF_RANGE;
+    }
 
     uint8_t *dst = (uint8_t *)buf;
-    for (size_t i = 0; i < len; i++) {
-        uint64_t pos = offset + i;
+    size_t done = 0;
+    while (done < len) {
+        uint64_t pos = offset + done;
         uint32_t pg  = (uint32_t)(pos / PAGE_SIZE);
-        uint32_t off = (uint32_t)(pos % PAGE_SIZE);
+        size_t   off = (size_t)(pos % PAGE_SIZE);
+        size_t   chunk = PAGE_SIZE - off;
+        if (chunk > len - done) chunk = len - done;
+
         paddr_t pa = 0;
         if (ab_vmo_get_or_alloc_page(vmo, pg, 0, &pa) == AB_OK && pa != 0) {
-            const uint8_t *kva = (const uint8_t *)paddr_to_physmap(pa);
-            dst[i] = kva[off];
+            const uint8_t *kva = (const uint8_t *)paddr_to_physmap(pa) + off;
+            for (size_t b = 0; b < chunk; b++) dst[done + b] = kva[b];
         } else {
-            dst[i] = 0;
+            for (size_t b = 0; b < chunk; b++) dst[done + b] = 0;
         }
+        done += chunk;
     }
     return AB_OK;
 }
 
 ab_status_t ab_vmo_write(ab_object_t *vmo_obj, const void *buf, uint64_t offset, size_t len) {
-    if (!vmo_obj || vmo_obj->type != AB_OBJ_TYPE_VMO || !buf) return AB_ERR_INVALID_ARGS;
+    if (!vmo_obj || vmo_obj->type != AB_OBJ_TYPE_VMO) return AB_ERR_INVALID_ARGS;
+    if (len == 0) return AB_OK;
+    if (!buf) return AB_ERR_INVALID_ARGS;
     ab_vmo_dispatcher_t *vmo = (ab_vmo_dispatcher_t *)vmo_obj;
-    if (offset + len > vmo->size_bytes) return AB_ERR_OUT_OF_RANGE;
+    if (offset > vmo->size_bytes || len > vmo->size_bytes - offset) {
+        return AB_ERR_OUT_OF_RANGE;
+    }
 
     const uint8_t *src = (const uint8_t *)buf;
-    for (size_t i = 0; i < len; i++) {
-        uint64_t pos = offset + i;
+    size_t done = 0;
+    while (done < len) {
+        uint64_t pos = offset + done;
         uint32_t pg  = (uint32_t)(pos / PAGE_SIZE);
-        uint32_t off = (uint32_t)(pos % PAGE_SIZE);
+        size_t   off = (size_t)(pos % PAGE_SIZE);
+        size_t   chunk = PAGE_SIZE - off;
+        if (chunk > len - done) chunk = len - done;
+
         paddr_t pa = 0;
         ab_status_t st = ab_vmo_get_or_alloc_page(vmo, pg, 1, &pa);
         if (st != AB_OK) return st;
-        uint8_t *kva = (uint8_t *)paddr_to_physmap(pa);
-        kva[off] = src[i];
+        uint8_t *kva = (uint8_t *)paddr_to_physmap(pa) + off;
+        for (size_t b = 0; b < chunk; b++) kva[b] = src[done + b];
+        done += chunk;
     }
     return AB_OK;
 }
 
+static void vmar_destroy(ab_object_t *obj) {
+    ab_vmar_dispatcher_t *vmar = (ab_vmar_dispatcher_t *)obj;
+    if (vmar->proc) {
+        ab_object_release(&vmar->proc->base);
+        vmar->proc = NULL;
+    }
+    kfree(vmar);
+}
+
 ab_status_t ab_vmar_dispatcher_create(ab_process_t *proc, ab_object_t **out_obj) {
+    if (!proc || !out_obj) return AB_ERR_INVALID_ARGS;
     ab_vmar_dispatcher_t *vmar = (ab_vmar_dispatcher_t *)ab_object_alloc(
         sizeof(ab_vmar_dispatcher_t), AB_OBJ_TYPE_VMAR, AB_SIGNAL_NONE,
-        NULL, NULL);
+        NULL, vmar_destroy);
     if (!vmar) return AB_ERR_NO_MEMORY;
+    ab_object_add_ref(&proc->base);
     vmar->proc    = proc;
     vmar->base_va = 0x10000000ULL;
     vmar->size    = 0x30000000ULL;
@@ -989,24 +1111,45 @@ static uint32_t vm_perms_to_mmu_flags(uint32_t vm_perms, int is_device) {
     return flags;
 }
 
+static int vmar_range_overlaps_locked(ab_process_t *proc, vaddr_t base, size_t len) {
+    vaddr_t end = base + len;
+    for (uint32_t i = 0; i < MAX_VMAR_MAPPINGS; i++) {
+        const ab_vmar_mapping_t *m = &proc->mappings[i];
+        if (!m->active) continue;
+        vaddr_t m_end = m->base_va + m->size;
+        if (base < m_end && m->base_va < end) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 ab_status_t ab_vmar_map(ab_process_t *proc, ab_object_t *vmar_obj,
                         size_t vmar_offset, ab_object_t *vmo_obj,
                         uint64_t vmo_offset, size_t len, uint32_t vm_perms,
                         vaddr_t *out_va) {
     (void)proc;
     if (!vmar_obj || vmar_obj->type != AB_OBJ_TYPE_VMAR ||
-        !vmo_obj  || vmo_obj->type  != AB_OBJ_TYPE_VMO  || !out_va) {
+        !vmo_obj  || vmo_obj->type  != AB_OBJ_TYPE_VMO  || !out_va || len == 0) {
+        return AB_ERR_INVALID_ARGS;
+    }
+    if ((vmo_offset & (PAGE_SIZE - 1)) != 0) {
         return AB_ERR_INVALID_ARGS;
     }
 
     ab_vmar_dispatcher_t *vmar = (ab_vmar_dispatcher_t *)vmar_obj;
     ab_process_t *target_proc  = vmar->proc;
     ab_vmo_dispatcher_t *vmo   = (ab_vmo_dispatcher_t *)vmo_obj;
+    if (!target_proc || target_proc->exited) return AB_ERR_BAD_STATE;
 
     size_t aligned_len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    if (vmo_offset + aligned_len > vmo->size_bytes) {
+    if (aligned_len < len) return AB_ERR_OUT_OF_RANGE;
+    if (vmo_offset > vmo->size_bytes || aligned_len > vmo->size_bytes - vmo_offset) {
         return AB_ERR_OUT_OF_RANGE;
     }
+
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&target_proc->vmar_lock, &irqstate);
 
     int slot = -1;
     for (int i = 0; i < (int)MAX_VMAR_MAPPINGS; i++) {
@@ -1015,17 +1158,48 @@ ab_status_t ab_vmar_map(ab_process_t *proc, ab_object_t *vmar_obj,
             break;
         }
     }
-    if (slot < 0) return AB_ERR_NO_RESOURCES;
-
-    if (target_proc->next_map_va == 0) {
-        target_proc->next_map_va = 0x10000000ULL;
+    if (slot < 0) {
+        spin_lock_irqrestore(&target_proc->vmar_lock, irqstate);
+        return AB_ERR_NO_RESOURCES;
     }
-    vaddr_t map_va;
+
+    vaddr_t map_va = 0;
+    vaddr_t vmar_end = vmar->base_va + vmar->size;
     if (vmar_offset != 0) {
-        map_va = vmar->base_va + (vmar_offset & ~(PAGE_SIZE - 1));
+        size_t aligned_off = vmar_offset & ~(PAGE_SIZE - 1);
+        if (aligned_off >= vmar->size || aligned_len > vmar->size - aligned_off) {
+            spin_lock_irqrestore(&target_proc->vmar_lock, irqstate);
+            return AB_ERR_OUT_OF_RANGE;
+        }
+        map_va = vmar->base_va + aligned_off;
+        if (vmar_range_overlaps_locked(target_proc, map_va, aligned_len)) {
+            spin_lock_irqrestore(&target_proc->vmar_lock, irqstate);
+            return AB_ERR_INVALID_ARGS;
+        }
     } else {
-        map_va = target_proc->next_map_va;
-        target_proc->next_map_va += aligned_len + PAGE_SIZE;
+        /* First-fit search across [vmar->base_va .. vmar_end) with 1-page guard gap */
+        vaddr_t cand = vmar->base_va;
+        for (;;) {
+            if (cand >= vmar_end || aligned_len > vmar_end - cand) {
+                spin_lock_irqrestore(&target_proc->vmar_lock, irqstate);
+                return AB_ERR_NO_RESOURCES;
+            }
+            int bumped = 0;
+            for (uint32_t i = 0; i < MAX_VMAR_MAPPINGS; i++) {
+                const ab_vmar_mapping_t *m = &target_proc->mappings[i];
+                if (!m->active) continue;
+                vaddr_t m_end = m->base_va + m->size;
+                if (cand < m_end && m->base_va < cand + aligned_len) {
+                    cand = m_end + PAGE_SIZE;
+                    bumped = 1;
+                    break;
+                }
+            }
+            if (!bumped) {
+                map_va = cand;
+                break;
+            }
+        }
     }
 
     ab_object_add_ref(&vmo->base);
@@ -1046,37 +1220,107 @@ ab_status_t ab_vmar_map(ab_process_t *proc, ab_object_t *vmar_obj,
         }
     }
 
-    if (vm_perms & AB_VM_PERM_EXECUTE) {
-        __asm__ volatile("ic ialluis\n\tdsb ish\n\tisb" ::: "memory");
-    }
+    spin_lock_irqrestore(&target_proc->vmar_lock, irqstate);
     *out_va = map_va;
     return AB_OK;
 }
 
-int ab_process_handle_page_fault(ab_process_t *proc, vaddr_t fault_va, int is_write) {
-    if (!proc) return -1;
+ab_status_t ab_vmar_unmap(ab_process_t *proc, ab_object_t *vmar_obj,
+                          vaddr_t addr, size_t len) {
+    (void)proc;
+    if (!vmar_obj || vmar_obj->type != AB_OBJ_TYPE_VMAR || len == 0) {
+        return AB_ERR_INVALID_ARGS;
+    }
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
+        return AB_ERR_INVALID_ARGS;
+    }
+
+    ab_vmar_dispatcher_t *vmar = (ab_vmar_dispatcher_t *)vmar_obj;
+    ab_process_t *target_proc  = vmar->proc;
+    if (!target_proc || target_proc->exited) return AB_ERR_BAD_STATE;
+
+    size_t aligned_len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (aligned_len < len) return AB_ERR_OUT_OF_RANGE;
+    if (addr < vmar->base_va || aligned_len > (vmar->base_va + vmar->size) - addr) {
+        return AB_ERR_OUT_OF_RANGE;
+    }
+    vaddr_t end = addr + aligned_len;
+
+    ab_vmo_dispatcher_t *to_release[MAX_VMAR_MAPPINGS];
+    uint32_t release_cnt = 0;
+
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&target_proc->vmar_lock, &irqstate);
+
+    for (uint32_t i = 0; i < MAX_VMAR_MAPPINGS; i++) {
+        ab_vmar_mapping_t *m = &target_proc->mappings[i];
+        if (!m->active) continue;
+        if (m->base_va >= addr && m->base_va + m->size <= end) {
+            for (size_t off = 0; off < m->size; off += PAGE_SIZE) {
+                vmm_unmap_page(target_proc->aspace, m->base_va + off);
+            }
+            if (m->vmo) {
+                to_release[release_cnt++] = m->vmo;
+                m->vmo = NULL;
+            }
+            m->active = 0;
+        }
+    }
+
+    spin_lock_irqrestore(&target_proc->vmar_lock, irqstate);
+
+    if (release_cnt == 0) {
+        return AB_ERR_NOT_FOUND;
+    }
+    for (uint32_t i = 0; i < release_cnt; i++) {
+        ab_object_release(&to_release[i]->base);
+    }
+    return AB_OK;
+}
+
+int ab_process_handle_page_fault(ab_process_t *proc, vaddr_t fault_va,
+                                 int is_write, int is_exec) {
+    if (!proc || proc->exited) return -1;
     vaddr_t page_va = fault_va & ~(PAGE_SIZE - 1);
+
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&proc->vmar_lock, &irqstate);
 
     for (uint32_t i = 0; i < MAX_VMAR_MAPPINGS; i++) {
         ab_vmar_mapping_t *m = &proc->mappings[i];
-        if (!m->active) continue;
+        if (!m->active || !m->vmo) continue;
         if (page_va >= m->base_va && page_va < m->base_va + m->size) {
             if (is_write && !(m->vm_perms & AB_VM_PERM_WRITE)) {
-                return -1; /* Write to read-only VMAR mapping! */
+                spin_lock_irqrestore(&proc->vmar_lock, irqstate);
+                return -1; /* Write to read-only VMAR mapping */
+            }
+            if (is_exec && !(m->vm_perms & AB_VM_PERM_EXECUTE)) {
+                spin_lock_irqrestore(&proc->vmar_lock, irqstate);
+                return -1; /* Execute on non-executable VMAR mapping */
+            }
+            if (!is_write && !is_exec && !(m->vm_perms & AB_VM_PERM_READ)) {
+                spin_lock_irqrestore(&proc->vmar_lock, irqstate);
+                return -1;
             }
             size_t offset_in_vmar = page_va - m->base_va;
             uint32_t pg_idx = (uint32_t)((m->vmo_offset + offset_in_vmar) / PAGE_SIZE);
             paddr_t pa = 0;
             if (ab_vmo_get_or_alloc_page(m->vmo, pg_idx, 1, &pa) != AB_OK) {
+                spin_lock_irqrestore(&proc->vmar_lock, irqstate);
                 return -1;
             }
             uint32_t mmu_flags = vm_perms_to_mmu_flags(m->vm_perms, m->vmo->is_physical);
             vmm_map_page(proc->aspace, page_va, pa, mmu_flags);
+            ab_koid_t vmo_koid = m->vmo->base.koid;
+            spin_lock_irqrestore(&proc->vmar_lock, irqstate);
+
             dprintf(INFO, "[vmm-fault] Demand-paged VMO (koid=%lu, pg=%u -> PA 0x%lx) into proc '%s' at VA 0x%lx\n",
-                    m->vmo->base.koid, pg_idx, pa, proc->name, page_va);
+                    vmo_koid, pg_idx, pa, proc->name, page_va);
             return 0;
         }
     }
+
+    spin_lock_irqrestore(&proc->vmar_lock, irqstate);
     return -1;
 }
 
@@ -1089,16 +1333,33 @@ extern void arm64_uspace_entry(uintptr_t arg1, uintptr_t arg2, uintptr_t pc,
                                uintptr_t user_sp, vaddr_t kstack_top);
 #define USER_KVA_TO_UVA(kva) ((vaddr_t)((uintptr_t)(kva) - 0xFFFFFFFF80000000ULL))
 
-static volatile uint16_t g_next_asid = 1;
+static void job_destroy(ab_object_t *obj) {
+    ab_job_dispatcher_t *job = (ab_job_dispatcher_t *)obj;
+    ab_process_t *to_release[MAX_PROCS_PER_JOB];
+    uint32_t release_cnt = 0;
 
-uint16_t ab_alloc_asid(void) {
-    return __atomic_fetch_add(&g_next_asid, 1, __ATOMIC_RELAXED);
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&g_job_lock, &irqstate);
+    for (uint32_t i = 0; i < MAX_PROCS_PER_JOB; i++) {
+        if (job->procs[i] != NULL) {
+            job->procs[i]->parent_job = NULL;
+            to_release[release_cnt++] = job->procs[i];
+            job->procs[i] = NULL;
+        }
+    }
+    job->child_count = 0;
+    spin_lock_irqrestore(&g_job_lock, irqstate);
+
+    for (uint32_t i = 0; i < release_cnt; i++) {
+        ab_object_release(&to_release[i]->base);
+    }
+    kfree(job);
 }
 
 ab_status_t ab_job_dispatcher_create(ab_object_t **out_obj) {
     ab_job_dispatcher_t *job = (ab_job_dispatcher_t *)ab_object_alloc(
         sizeof(ab_job_dispatcher_t), AB_OBJ_TYPE_JOB, AB_SIGNAL_NONE,
-        NULL, NULL);
+        NULL, job_destroy);
     if (!job) return AB_ERR_NO_MEMORY;
     job->lock.value  = 0;
     job->child_count = 0;
@@ -1112,30 +1373,92 @@ ab_status_t ab_job_dispatcher_create(ab_object_t **out_obj) {
 
 void ab_job_add_process(ab_job_dispatcher_t *job, ab_process_t *proc) {
     if (!job || !proc) return;
+    ab_process_t *old_proc = NULL;
+
     spin_lock_saved_state_t irqstate;
-    spin_lock_irqsave(&job->lock, &irqstate);
+    spin_lock_irqsave(&g_job_lock, &irqstate);
     proc->base.related_koid = job->base.koid;
     for (uint32_t i = 0; i < MAX_PROCS_PER_JOB; i++) {
         if (job->procs[i] == NULL || job->procs[i]->exited) {
             if (job->procs[i] != NULL) {
-                ab_object_release(&job->procs[i]->base);
+                job->procs[i]->parent_job = NULL;
+                old_proc = job->procs[i];
             } else {
                 job->child_count++;
             }
             ab_object_add_ref(&proc->base);
+            proc->parent_job = job;
             job->procs[i] = proc;
             break;
         }
     }
-    spin_lock_irqrestore(&job->lock, irqstate);
+    spin_lock_irqrestore(&g_job_lock, irqstate);
+
+    if (old_proc) {
+        ab_object_release(&old_proc->base);
+    }
+}
+
+void ab_job_remove_process(ab_process_t *proc) {
+    if (!proc) return;
+    int removed = 0;
+
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&g_job_lock, &irqstate);
+    ab_job_dispatcher_t *job = proc->parent_job;
+    if (job) {
+        for (uint32_t i = 0; i < MAX_PROCS_PER_JOB; i++) {
+            if (job->procs[i] == proc) {
+                job->procs[i] = NULL;
+                if (job->child_count > 0) job->child_count--;
+                removed = 1;
+                break;
+            }
+        }
+        proc->parent_job = NULL;
+    }
+    spin_lock_irqrestore(&g_job_lock, irqstate);
+
+    if (removed) {
+        ab_object_release(&proc->base);
+    }
+}
+
+static void thread_dispatcher_destroy(ab_object_t *obj) {
+    ab_thread_dispatcher_t *td = (ab_thread_dispatcher_t *)obj;
+    ab_process_t *proc = td->proc;
+
+    if (proc) {
+        spin_lock_saved_state_t irqstate;
+        spin_lock_irqsave(&g_job_lock, &irqstate);
+        for (uint32_t t = 0; t < MAX_THREADS_PER_PROCESS; t++) {
+            if (proc->threads[t] == td) {
+                proc->threads[t] = NULL;
+                break;
+            }
+        }
+        spin_lock_irqrestore(&g_job_lock, irqstate);
+    }
+
+    if (td->kthread) {
+        thread_detach(td->kthread);
+        td->kthread = NULL;
+    }
+
+    if (proc) {
+        td->proc = NULL;
+        ab_object_release(&proc->base);
+    }
+
+    kfree(td);
 }
 
 ab_status_t ab_thread_dispatcher_create(ab_process_t *proc, const char *name,
                                         ab_object_t **out_obj) {
-    if (!proc) return AB_ERR_INVALID_ARGS;
+    if (!proc || !out_obj) return AB_ERR_INVALID_ARGS;
     ab_thread_dispatcher_t *td = (ab_thread_dispatcher_t *)ab_object_alloc(
         sizeof(ab_thread_dispatcher_t), AB_OBJ_TYPE_THREAD, AB_SIGNAL_NONE,
-        NULL, NULL);
+        NULL, thread_dispatcher_destroy);
     if (!td) return AB_ERR_NO_MEMORY;
 
     size_t i = 0;
@@ -1148,10 +1471,20 @@ ab_status_t ab_thread_dispatcher_create(ab_process_t *proc, const char *name,
     td->base.related_koid = proc->base.koid;
     ab_object_add_ref(&proc->base);
     td->proc = proc;
-    if (proc->thread_count < MAX_THREADS_PER_PROCESS) {
-        ab_object_add_ref(&td->base);
-        proc->threads[proc->thread_count++] = td;
+
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&g_job_lock, &irqstate);
+    for (uint32_t slot = 0; slot < MAX_THREADS_PER_PROCESS; slot++) {
+        if (proc->threads[slot] == NULL) {
+            proc->threads[slot] = td;
+            if (slot + 1 > proc->thread_count) {
+                proc->thread_count = slot + 1;
+            }
+            break;
+        }
     }
+    spin_lock_irqrestore(&g_job_lock, irqstate);
+
     *out_obj = &td->base;
     return AB_OK;
 }
@@ -1181,7 +1514,12 @@ static int user_thread_trampoline(void *arg) {
         size_t stack_pages = 6U; /* 24KB EL0 user stack */
         for (size_t spg = 0; spg < stack_pages; spg++) {
             paddr_t stack_pa = 0;
-            pmm_alloc_page(VM_PAGE_STATE_OBJECT, &stack_pa);
+            if (!pmm_alloc_page(VM_PAGE_STATE_OBJECT, &stack_pa)) {
+                dprintf(CRITICAL, "[process '%s'] Out of memory allocating EL0 stack!\n", proc->name);
+                break;
+            }
+            uint8_t *skva = (uint8_t *)paddr_to_physmap(stack_pa);
+            for (size_t b = 0; b < PAGE_SIZE; b++) skva[b] = 0;
             vmm_map_page(proc->aspace, user_stack_va + spg * PAGE_SIZE, stack_pa,
                          MMU_FLAG_PERM_USER | MMU_FLAG_PERM_READ | MMU_FLAG_PERM_WRITE);
         }
@@ -1204,6 +1542,9 @@ ab_status_t ab_process_start_user(ab_process_t *caller_proc,
     if (!target_proc || !uthr || uthr->proc != target_proc) {
         return AB_ERR_INVALID_ARGS;
     }
+    if (target_proc->exited || uthr->kthread != NULL) {
+        return AB_ERR_BAD_STATE;
+    }
 
     ab_handle_t child_arg_h = AB_HANDLE_INVALID;
     if (arg_handle != AB_HANDLE_INVALID && caller_proc != NULL) {
@@ -1216,6 +1557,10 @@ ab_status_t ab_process_start_user(ab_process_t *caller_proc,
         st = handle_install_transferred(target_proc, transferred_obj,
                                         transferred_rights, &child_arg_h);
         if (st != AB_OK) {
+            int32_t old_hc = __atomic_fetch_sub(&transferred_obj->handle_count, 1, __ATOMIC_ACQ_REL);
+            if (old_hc == 1 && transferred_obj->on_zero_handles) {
+                transferred_obj->on_zero_handles(transferred_obj);
+            }
             ab_object_release(transferred_obj);
             return st;
         }
@@ -1229,10 +1574,16 @@ ab_status_t ab_process_start_user(ab_process_t *caller_proc,
     uthr->arg1       = arg2;
 
     thread_t *kt = thread_create(uthr->name, user_thread_trampoline, uthr);
-    if (!kt) return AB_ERR_NO_MEMORY;
+    if (!kt) {
+        if (caller_proc != NULL && child_arg_h != AB_HANDLE_INVALID) {
+            handle_close(target_proc, child_arg_h);
+        }
+        return AB_ERR_NO_MEMORY;
+    }
     kt->process_obj = target_proc;
     kt->thread_obj  = uthr;
     kt->aspace      = target_proc->aspace;
+    kt->detached    = 0; /* Owned by uthr until thread_dispatcher_destroy */
     ab_object_add_ref(&uthr->base);
     uthr->kthread = kt;
     thread_resume(kt);
@@ -1454,7 +1805,7 @@ ab_status_t ab_job_get_ps_info(ab_object_t *job_obj, ab_task_info_entry_t *out_e
     size_t shared_code_bytes = (size_t)((uintptr_t)_rodata_end - (uintptr_t)_text_start);
 
     spin_lock_saved_state_t irqstate;
-    spin_lock_irqsave(&job->lock, &irqstate);
+    spin_lock_irqsave(&g_job_lock, &irqstate);
 
     uint32_t active_procs = 0;
     for (uint32_t i = 0; i < MAX_PROCS_PER_JOB; i++) {
@@ -1498,12 +1849,15 @@ ab_status_t ab_job_get_ps_info(ab_object_t *job_obj, ab_task_info_entry_t *out_e
         size_t sh_bytes   = is_embedded ? shared_code_bytes : 0;
         size_t scaled_sh  = sh_bytes;
 
+        spin_lock_saved_state_t v_irq;
+        spin_lock_irqsave(&proc->vmar_lock, &v_irq);
         for (uint32_t m_idx = 0; m_idx < MAX_VMAR_MAPPINGS; m_idx++) {
             ab_vmar_mapping_t *m = &proc->mappings[m_idx];
             if (!m->active || !m->vmo) continue;
             size_t comm_bytes = vmo_count_committed_pages(m->vmo, m->vmo_offset, m->size) * PAGE_SIZE;
             priv_bytes += comm_bytes;
         }
+        spin_lock_irqrestore(&proc->vmar_lock, v_irq);
 
         pe->private_bytes = priv_bytes;
         pe->shared_bytes  = sh_bytes;
@@ -1548,7 +1902,7 @@ ab_status_t ab_job_get_ps_info(ab_object_t *job_obj, ab_task_info_entry_t *out_e
         }
     }
 
-    spin_lock_irqrestore(&job->lock, irqstate);
+    spin_lock_irqrestore(&g_job_lock, irqstate);
     *actual_out = count;
     return AB_OK;
 }
@@ -1585,20 +1939,23 @@ ab_status_t ab_job_get_process_maps(ab_object_t *job_obj, ab_koid_t target_proc_
 
     if (target_proc_koid == 0) {
         target = get_current_process();
+        if (target) ab_object_add_ref(&target->base);
     } else {
         spin_lock_saved_state_t irqstate;
-        spin_lock_irqsave(&job->lock, &irqstate);
+        spin_lock_irqsave(&g_job_lock, &irqstate);
         for (uint32_t i = 0; i < MAX_PROCS_PER_JOB; i++) {
             if (job->procs[i] && !job->procs[i]->exited &&
                 job->procs[i]->base.koid == target_proc_koid) {
                 target = job->procs[i];
+                ab_object_add_ref(&target->base);
                 break;
             }
         }
-        spin_lock_irqrestore(&job->lock, irqstate);
+        spin_lock_irqrestore(&g_job_lock, irqstate);
     }
 
     if (!target || target->exited) {
+        if (target) ab_object_release(&target->base);
         return AB_ERR_NOT_FOUND;
     }
 
@@ -1616,8 +1973,13 @@ ab_status_t ab_job_get_process_maps(ab_object_t *job_obj, ab_koid_t target_proc_
                   1, AB_INFO_MAPS_TYPE_VMAR, 0, 0, 0, 0, 0);
 
     /* 3. Depth 2: Embedded userboot .text + .rodata mapping ('M', only for userboot) */
-    if (target->thread_count > 0 && target->threads[0] &&
-        target->threads[0]->user_entry < 0x20000000ULL) {
+    spin_lock_saved_state_t j_irq;
+    spin_lock_irqsave(&g_job_lock, &j_irq);
+    int is_embedded = (target->thread_count > 0 && target->threads[0] &&
+                       target->threads[0]->user_entry < 0x20000000ULL);
+    spin_lock_irqrestore(&g_job_lock, j_irq);
+
+    if (is_embedded) {
         add_map_entry(out_maps, max_maps, &count,
                       "userboot-rodata", USER_KVA_TO_UVA(_text_start), code_size,
                       2, AB_INFO_MAPS_TYPE_MAPPING,
@@ -1627,7 +1989,7 @@ ab_status_t ab_job_get_process_maps(ab_object_t *job_obj, ab_koid_t target_proc_
     }
 
     /* 4. Depth 2: Process User Stack mapping ('M') */
-    if (target->stack_size > 0) {
+    if (target->stack_size > 0 && target->aspace) {
         paddr_t stack_pa = 0;
         vmm_resolve_vaddr(target->aspace, target->stack_va, &stack_pa, NULL);
         add_map_entry(out_maps, max_maps, &count,
@@ -1643,6 +2005,8 @@ ab_status_t ab_job_get_process_maps(ab_object_t *job_obj, ab_koid_t target_proc_
                   "vmar-dynamic", 0x10000000ULL, 0x30000000ULL,
                   2, AB_INFO_MAPS_TYPE_VMAR, 0, 0, 0, 0, 0);
 
+    spin_lock_saved_state_t v_irq;
+    spin_lock_irqsave(&target->vmar_lock, &v_irq);
     for (uint32_t i = 0; i < MAX_VMAR_MAPPINGS; i++) {
         ab_vmar_mapping_t *m = &target->mappings[i];
         if (!m->active || !m->vmo) continue;
@@ -1658,7 +2022,9 @@ ab_status_t ab_job_get_process_maps(ab_object_t *job_obj, ab_koid_t target_proc_
                       m->vm_perms, m->vmo->base.koid,
                       m->vmo_offset, comm_pages, first_pa);
     }
+    spin_lock_irqrestore(&target->vmar_lock, v_irq);
 
+    ab_object_release(&target->base);
     *actual_out = count;
     return AB_OK;
 }

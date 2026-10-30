@@ -41,7 +41,13 @@
 #define SYS_OBJECT_SET_NAME     31
 #define SYS_JOB_GET_PS_INFO     32
 #define SYS_PROCESS_GET_MAPS    33
+#define SYS_VMAR_UNMAP          34
 
 void syscall_dispatch(iframe_t *frame);
+void ab_process_exit_current(int exit_code);
+
+/* Safe EL0 <-> EL1 user memory copy helpers */
+ab_status_t copy_from_user(void *kdst, const void *usrc, size_t len);
+ab_status_t copy_to_user(void *udst, const void *ksrc, size_t len);
 
 #endif /* ABOS_SYSCALLS_H */

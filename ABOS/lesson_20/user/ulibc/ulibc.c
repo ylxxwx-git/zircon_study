@@ -120,6 +120,10 @@ ab_status_t sys_vmar_map(ab_handle_t vmar_h, uint64_t vmar_offset,
     return __ab_syscall4(vmar_h, vmar_offset, (uintptr_t)&args, 0, SYS_VMAR_MAP);
 }
 
+ab_status_t sys_vmar_unmap(ab_handle_t vmar_h, vaddr_t addr, uint64_t len) {
+    return __ab_syscall4(vmar_h, addr, len, 0, SYS_VMAR_UNMAP);
+}
+
 ab_status_t sys_process_create(ab_handle_t job_h, const char *name,
                                ab_handle_t *out_proc, ab_handle_t *out_vmar) {
     ab_process_create_args_t args = { name, u_strlen(name), out_proc, out_vmar };
@@ -240,6 +244,16 @@ int64_t u_atoi(const char *s, int *out_ok) {
     return sign * val;
 }
 
+ab_time_t ulibc_clock_get_monotonic(void) {
+    uint64_t cnt = 0, freq = 0;
+    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(cnt));
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+    if (freq == 0) return 0;
+    uint64_t sec = cnt / freq;
+    uint64_t rem = cnt % freq;
+    return sec * 1000000000ULL + (rem * 1000000000ULL) / freq;
+}
+
 void u_itoa(int64_t val, char *buf) {
     if (val == 0) {
         buf[0] = '0';
@@ -250,7 +264,7 @@ void u_itoa(int64_t val, char *buf) {
     uint64_t uval;
     if (val < 0) {
         neg = 1;
-        uval = (uint64_t)(-val);
+        uval = 0ULL - (uint64_t)val;
     } else {
         uval = (uint64_t)val;
     }
@@ -421,7 +435,7 @@ int u_vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
                 int64_t v = is_long ? va_arg(ap, int64_t) : (int64_t)va_arg(ap, int);
                 if (v < 0) {
                     buf_putc(buf, size, &pos, '-');
-                    buf_put_uint(buf, size, &pos, (uint64_t)(-v), 10, width, pad, 0);
+                    buf_put_uint(buf, size, &pos, 0ULL - (uint64_t)v, 10, width, pad, 0);
                 } else {
                     buf_put_uint(buf, size, &pos, (uint64_t)v, 10, width, pad, 0);
                 }

@@ -33,5 +33,7 @@ with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as tf:
 
 raw = buf.getvalue()
 disk_size = 1024 * 1024
+if len(raw) > disk_size:
+    raise ValueError(f"TAR archive ({len(raw)} bytes) exceeds disk_size ({disk_size} bytes)")
 with open(disk_path, "wb") as f:
     f.write(raw + b"\x00" * (disk_size - len(raw)))

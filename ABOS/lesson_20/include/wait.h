@@ -29,6 +29,7 @@ typedef struct event {
 } event_t;
 
 void wait_queue_init(wait_queue_t *wq);
+void wait_queue_remove_thread_locked(wait_queue_t *wq, thread_t *target);
 int  wait_queue_block_locked(wait_queue_t *wq, ab_time_t deadline_ns);
 int  wait_queue_wake_one_locked(wait_queue_t *wq, int wait_status);
 int  wait_queue_wake_all_locked(wait_queue_t *wq, int wait_status);

@@ -8,7 +8,8 @@
  *     and shell.bin, all linked with user/link.ld at VA 0x20000000).
  *   - 'userboot' maps the BOOTFS VMO in EL0, extracts each executable into
  *     its own VMO, maps it at VA 0x20000000 in the target process's VMAR,
- *     and starts console-srv, fs-srv, and abos-shell-0..3.
+ *     passes typed AB_PA_* capabilities via ab_proc_args_t, and starts
+ *     console-srv, fs-srv, and abos-shell-0..3.
  * ========================================================================= */
 #include "ulibc.h"
 
@@ -36,14 +37,17 @@ static const uint8_t *bootfs_find_file(const uint8_t *bootfs, size_t bootfs_sz,
     return NULL;
 }
 
-static ab_handle_t spawn_from_bootfs(ab_handle_t root_job_h,
+static ab_handle_t spawn_from_bootfs(ab_handle_t root_job_h, ab_handle_t log_h,
                                      const uint8_t *bootfs, size_t bootfs_sz,
                                      const char *bin_name, const char *proc_name,
-                                     ab_handle_t *handles, uint32_t num_handles,
-                                     uint64_t arg2) {
+                                     ab_handle_t *handles, const uint8_t *handle_types,
+                                     uint32_t num_handles, uint64_t arg2) {
     uint32_t fsz = 0;
     const uint8_t *bin_data = bootfs_find_file(bootfs, bootfs_sz, bin_name, &fsz);
     if (!bin_data || fsz == 0) {
+        char err[96];
+        u_snprintf(err, sizeof(err), "[userboot] ERROR: '%s' not found in BOOTFS!", bin_name);
+        ulog(log_h, err);
         return AB_HANDLE_INVALID;
     }
 
@@ -51,30 +55,51 @@ static ab_handle_t spawn_from_bootfs(ab_handle_t root_job_h,
     if (map_sz == 0) map_sz = PAGE_SIZE;
 
     ab_handle_t bin_vmo = AB_HANDLE_INVALID;
-    sys_vmo_create(map_sz, 0, &bin_vmo);
+    if (sys_vmo_create(map_sz, 0, &bin_vmo) != AB_OK) {
+        ulog(log_h, "[userboot] ERROR: sys_vmo_create failed!");
+        return AB_HANDLE_INVALID;
+    }
     sys_object_set_name(bin_vmo, bin_name);
     sys_vmo_write(bin_vmo, bin_data, 0, fsz);
 
     ab_handle_t proc_h = 0, vmar_h = 0, thr_h = 0;
-    sys_process_create(root_job_h, proc_name, &proc_h, &vmar_h);
+    if (sys_process_create(root_job_h, proc_name, &proc_h, &vmar_h) != AB_OK) {
+        sys_handle_close(bin_vmo);
+        ulog(log_h, "[userboot] ERROR: sys_process_create failed!");
+        return AB_HANDLE_INVALID;
+    }
     sys_thread_create(proc_h, proc_name, &thr_h);
 
     /* Map standalone executable VMO at 0x20000000 (offset 0x10000000 in Root VMAR) */
     vaddr_t entry_va = 0;
-    sys_vmar_map(vmar_h, 0x10000000ULL, bin_vmo, 0, map_sz,
-                AB_VM_PERM_READ | AB_VM_PERM_WRITE | AB_VM_PERM_EXECUTE,
-                &entry_va);
+    ab_status_t st = sys_vmar_map(vmar_h, 0x10000000ULL, bin_vmo, 0, map_sz,
+                                  AB_VM_PERM_READ | AB_VM_PERM_WRITE | AB_VM_PERM_EXECUTE,
+                                  &entry_va);
     sys_handle_close(bin_vmo);
+    if (st != AB_OK) {
+        sys_handle_close(thr_h);
+        sys_handle_close(vmar_h);
+        sys_handle_close(proc_h);
+        ulog(log_h, "[userboot] ERROR: sys_vmar_map failed!");
+        return AB_HANDLE_INVALID;
+    }
 
     ab_handle_t p_ch = 0, c_ch = 0;
     sys_channel_create(0, &p_ch, &c_ch);
 
     handles[1] = vmar_h; /* Slot 1 is always the new process's Root VMAR handle */
-    uint32_t tag = 0x53525621U;
-    sys_channel_write(p_ch, &tag, sizeof(tag), handles, num_handles);
+    ab_proc_args_t pargs;
+    memset(&pargs, 0, sizeof(pargs));
+    pargs.magic = AB_PROC_ARGS_MAGIC;
+    for (uint32_t i = 0; i < num_handles && i < 8U; i++) {
+        pargs.handle_types[i] = handle_types[i];
+    }
+    sys_channel_write(p_ch, &pargs, sizeof(pargs), handles, num_handles);
     sys_handle_close(p_ch);
 
-    sys_process_start(proc_h, thr_h, entry_va, 0, c_ch, arg2);
+    if (sys_process_start(proc_h, thr_h, entry_va, 0, c_ch, arg2) != AB_OK) {
+        ulog(log_h, "[userboot] ERROR: sys_process_start failed!");
+    }
     sys_handle_close(thr_h);
     return proc_h;
 }
@@ -85,7 +110,10 @@ void userboot_entry(uint64_t arg0) {
     uint64_t bootfs_sz = 0;
     uint32_t act_b = 0, act_h = 0;
     ab_handle_t boot_h[5];
-    sys_channel_read(boot_ch, &bootfs_sz, sizeof(bootfs_sz), boot_h, 5, &act_b, &act_h);
+    if (sys_channel_read(boot_ch, &bootfs_sz, sizeof(bootfs_sz),
+                         boot_h, 5, &act_b, &act_h) != AB_OK || act_h < 5) {
+        sys_process_exit(-1);
+    }
     sys_handle_close(boot_ch);
 
     ab_handle_t root_job_h   = boot_h[0];
@@ -97,8 +125,11 @@ void userboot_entry(uint64_t arg0) {
     /* Map the BOOTFS VMO read-only into userboot's own VMAR */
     uint64_t bootfs_map_sz = (bootfs_sz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     vaddr_t bootfs_va = 0;
-    sys_vmar_map(ub_vmar_h, 0, bootfs_vmo_h, 0, bootfs_map_sz,
-                AB_VM_PERM_READ, &bootfs_va);
+    if (sys_vmar_map(ub_vmar_h, 0, bootfs_vmo_h, 0, bootfs_map_sz,
+                     AB_VM_PERM_READ, &bootfs_va) != AB_OK) {
+        ulog(root_log_h, "[userboot] PANIC: Failed to map BOOTFS VMO!");
+        sys_process_exit(-1);
+    }
     const uint8_t *bootfs = (const uint8_t *)bootfs_va;
 
     ulog(root_log_h, "[userboot] Mapped BOOTFS VMO! Loading console-srv.bin, fs-srv.bin, and shell.bin @ 0x20000000...");
@@ -110,6 +141,14 @@ void userboot_entry(uint64_t arg0) {
         sys_channel_create(0, &fs_srv_end[i],  &fs_cli_end[i]);
     }
 
+    static const uint8_t srv_types[3 + NUM_VTS] = {
+        AB_PA_LOG, AB_PA_VMAR_ROOT, AB_PA_RESOURCE,
+        AB_PA_CHANNEL_SRV, AB_PA_CHANNEL_SRV, AB_PA_CHANNEL_SRV, AB_PA_CHANNEL_SRV
+    };
+    static const uint8_t sh_types[5] = {
+        AB_PA_LOG, AB_PA_VMAR_ROOT, AB_PA_CONSOLE, AB_PA_FS, AB_PA_JOB_DEFAULT
+    };
+
     /* 1. Spawn standalone 'console-srv.bin' from BOOTFS */
     ab_handle_t log1 = 0, res1 = 0;
     sys_handle_duplicate(root_log_h, AB_RIGHT_SAME_RIGHTS, &log1);
@@ -118,9 +157,9 @@ void userboot_entry(uint64_t arg0) {
         log1, 0, res1,
         con_srv_end[0], con_srv_end[1], con_srv_end[2], con_srv_end[3]
     };
-    ab_handle_t con_proc = spawn_from_bootfs(root_job_h, bootfs, (size_t)bootfs_sz,
+    ab_handle_t con_proc = spawn_from_bootfs(root_job_h, root_log_h, bootfs, (size_t)bootfs_sz,
                                              "console-srv.bin", "console-srv",
-                                             con_h, 3 + NUM_VTS, 0);
+                                             con_h, srv_types, 3 + NUM_VTS, 0);
 
     /* 2. Spawn standalone 'fs-srv.bin' from BOOTFS */
     ab_handle_t log2 = 0, res2 = 0;
@@ -130,9 +169,9 @@ void userboot_entry(uint64_t arg0) {
         log2, 0, res2,
         fs_srv_end[0], fs_srv_end[1], fs_srv_end[2], fs_srv_end[3]
     };
-    ab_handle_t fs_proc = spawn_from_bootfs(root_job_h, bootfs, (size_t)bootfs_sz,
+    ab_handle_t fs_proc = spawn_from_bootfs(root_job_h, root_log_h, bootfs, (size_t)bootfs_sz,
                                             "fs-srv.bin", "fs-srv",
-                                            fs_h, 3 + NUM_VTS, 0);
+                                            fs_h, srv_types, 3 + NUM_VTS, 0);
 
     /* 3. Spawn 4 virtual terminal shells from standalone 'shell.bin' in BOOTFS */
     ab_handle_t sh_procs[NUM_VTS];
@@ -144,21 +183,31 @@ void userboot_entry(uint64_t arg0) {
         sys_handle_duplicate(root_log_h, AB_RIGHT_SAME_RIGHTS, &log_s);
         sys_handle_duplicate(root_job_h, AB_RIGHT_SAME_RIGHTS, &job_s);
         ab_handle_t sh_h[5] = { log_s, 0, con_cli_end[i], fs_cli_end[i], job_s };
-        sh_procs[i] = spawn_from_bootfs(root_job_h, bootfs, (size_t)bootfs_sz,
+        sh_procs[i] = spawn_from_bootfs(root_job_h, root_log_h, bootfs, (size_t)bootfs_sz,
                                         "shell.bin", sh_name,
-                                        sh_h, 5, (uint64_t)i);
+                                        sh_h, sh_types, 5, (uint64_t)i);
     }
 
-    /* Release BOOTFS VMO handle once all initial processes are spawned */
+    /* Unmap and release BOOTFS VMO once all initial processes are spawned */
+    sys_vmar_unmap(ub_vmar_h, bootfs_va, bootfs_map_sz);
     sys_handle_close(bootfs_vmo_h);
     sys_handle_close(ub_vmar_h);
 
     ab_signals_t obs = 0;
     for (uint32_t i = 0; i < NUM_VTS; i++) {
-        sys_object_wait_one(sh_procs[i], AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
+        if (sh_procs[i] != AB_HANDLE_INVALID) {
+            sys_object_wait_one(sh_procs[i], AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
+            sys_handle_close(sh_procs[i]);
+        }
     }
-    sys_object_wait_one(fs_proc,  AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
-    sys_object_wait_one(con_proc, AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
+    if (fs_proc != AB_HANDLE_INVALID) {
+        sys_object_wait_one(fs_proc, AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
+        sys_handle_close(fs_proc);
+    }
+    if (con_proc != AB_HANDLE_INVALID) {
+        sys_object_wait_one(con_proc, AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
+        sys_handle_close(con_proc);
+    }
 
     ulog(root_log_h, "[userboot] All 4 virtual terminals and user-space servers exited cleanly!");
     sys_process_exit(0);

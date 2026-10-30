@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" width="720" height="280">
+
+  <defs>
+    <filter id="sh" x="-4%" y="-4%" width="112%" height="116%">
+      <feDropShadow dx="2.5" dy="2.5" stdDeviation="1.2" flood-color="#9aa3ad" flood-opacity="0.65"/>
+    </filter>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .frame { fill: #ffffff; stroke: #111827; stroke-width: 1.5; }
+      .title { font-family: "Liberation Sans", Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #111827; }
+      .lbl   { font-family: "Liberation Serif", Georgia, serif; font-size: 12px; fill: #111827; }
+      .lbl-b { font-family: "Liberation Sans", Arial, sans-serif; font-size: 11.5px; font-weight: bold; fill: #111827; }
+      .mono  { font-family: "Liberation Mono", monospace; font-size: 10.5px; fill: #1f2937; }
+      .sub   { font-family: "Liberation Serif", Georgia, serif; font-size: 10.5px; fill: #374151; }
+      .box-green  { fill: #bbf7d0; stroke: #14532d; stroke-width: 1.4; filter: url(#sh); }
+      .box-blue   { fill: #bfdbfe; stroke: #1e3a8a; stroke-width: 1.4; filter: url(#sh); }
+      .box-amber  { fill: #fde68a; stroke: #78350f; stroke-width: 1.4; filter: url(#sh); }
+      .box-pink   { fill: #fbcfe8; stroke: #831843; stroke-width: 1.4; filter: url(#sh); }
+      .box-purple { fill: #e9d5ff; stroke: #4c1d95; stroke-width: 1.4; filter: url(#sh); }
+      .box-cyan   { fill: #bae6fd; stroke: #0c4a6e; stroke-width: 1.4; filter: url(#sh); }
+      .box-gray   { fill: #e5e7eb; stroke: #374151; stroke-width: 1.3; }
+      .dash-group { fill: #f8fafc; stroke: #334155; stroke-width: 1.2; stroke-dasharray: 5,4; }
+      .line  { stroke: #1f2937; stroke-width: 1.5; fill: none; marker-end: url(#arr); }
+      .bline { stroke: #1f2937; stroke-width: 1.5; fill: none; marker-start: url(#arr); marker-end: url(#arr); }
+      .dline { stroke: #475569; stroke-width: 1.3; stroke-dasharray: 4,3; fill: none; marker-end: url(#arr); }
+    </style>
+  </defs>
+
+  <rect x="2" y="2" width="716" height="276" class="frame"/>
+
+  <text x="360" y="24" text-anchor="middle" class="title">ABOS Capability Microkernel Architecture (EL0 User Servers over Zircon/LK EL1 Core)</text>
+  <rect x="24" y="38" width="672" height="76" class="dash-group"/>
+  <text x="360" y="54" text-anchor="middle" class="lbl-b">Unprivileged User Space (EL0, TTBR0_EL1 @ 0x2000_0000)</text>
+  <rect x="38" y="64" width="115" height="40" rx="5" class="box-purple"/>
+  <text x="95" y="88" text-anchor="middle" class="mono">userboot</text>
+  <rect x="168" y="64" width="128" height="40" rx="5" class="box-amber"/>
+  <text x="232" y="83" text-anchor="middle" class="mono">console-srv.bin</text>
+  <text x="232" y="97" text-anchor="middle" class="sub">PL011 + 4 VTs</text>
+  <rect x="310" y="64" width="128" height="40" rx="5" class="box-pink"/>
+  <text x="374" y="83" text-anchor="middle" class="mono">fs-srv.bin</text>
+  <text x="374" y="97" text-anchor="middle" class="sub">VirtIO-Blk + TAR</text>
+  <rect x="452" y="64" width="120" height="40" rx="5" class="box-green"/>
+  <text x="512" y="83" text-anchor="middle" class="mono">shell.bin × 4</text>
+  <text x="512" y="97" text-anchor="middle" class="sub">tty0 .. tty3</text>
+  <rect x="586" y="64" width="96" height="40" rx="5" class="box-cyan"/>
+  <text x="634" y="83" text-anchor="middle" class="mono">calc.bin</text>
+  <text x="634" y="97" text-anchor="middle" class="sub">Disk App</text>
+
+  <text x="360" y="131" text-anchor="middle" class="lbl-b">══════════ SVC #0 Capability Syscall Boundary (34 Syscalls + Pointer Validation) ══════════</text>
+
+  <rect x="24" y="142" width="672" height="58" rx="6" class="box-blue"/>
+  <text x="360" y="161" text-anchor="middle" class="lbl-b">EL1 Layer 2: Zircon Object &amp; Capability Layer (kernel/core/object.c, syscalls.c)</text>
+  <text x="360" y="179" text-anchor="middle" class="sub">ab_object_t • Gen-Tagged Handle Table &amp; Rights • StateTracker • Channel • Port • EventPair • VMO/VMAR • Job/Process/Thread • Resource/Interrupt</text>
+
+  <rect x="24" y="210" width="672" height="56" rx="6" class="box-green"/>
+  <text x="360" y="229" text-anchor="middle" class="lbl-b">EL1 Layer 1: LK Hardware &amp; Scheduling Core (start.S, mmu.c, pmm.c, thread.c, wait.c, gic.c, timer.c)</text>
+  <text x="360" y="247" text-anchor="middle" class="sub">4-Core SMP Bringup • VBAR_EL1 Trap Frame • PMM &amp; 512K Heap • 3-Level Page Tables &amp; ASIDs • Round-Robin Preemptive Scheduler • WaitQueues</text>
+
+</svg>

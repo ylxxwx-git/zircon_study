@@ -33,18 +33,34 @@ void arm64_sync_exception(iframe_t *iframe, uint32_t exception_flags, uint32_t e
         return;
     }
 
-    /* EC 0x24 = Data Abort from Lower EL (EL0) -> VMO demand paging! */
-    if (ec == 0x24) {
-        int is_write = ((iss >> 6) & 1U) ? 1 : 0;
-        ab_process_t *proc = get_current_process();
-        if (proc && ab_process_handle_page_fault(proc, (vaddr_t)far, is_write) == 0) {
-            return;
+    /* EC 0x20 (Instruction Abort) / 0x24 (Data Abort) from EL0 -> VMO demand paging! */
+    if (ec == 0x24 || ec == 0x20) {
+        uint32_t fsc = iss & 0x3FU;
+        /* Only demand-page on L1/L2/L3 Translation Faults (FSC 0x05..0x07) */
+        if ((fsc & 0x3CU) == 0x04U) {
+            int is_write = (ec == 0x24 && ((iss >> 6) & 1U)) ? 1 : 0;
+            int is_exec  = (ec == 0x20) ? 1 : 0;
+            ab_process_t *proc = get_current_process();
+            if (proc && ab_process_handle_page_fault(proc, (vaddr_t)far, is_write, is_exec) == 0) {
+                return;
+            }
         }
     }
 
-    dprintf(CRITICAL, "\n[PANIC] Unhandled Sync Exception on CPU %u (from %s)!\n",
-            arch_curr_cpu_num(),
-            (exception_flags & ARM64_EXCEPTION_FLAG_LOWER_EL) ? "EL0" : "EL1");
+    /* Isolate EL0 crashes: terminate only the faulting user process, keep kernel alive! */
+    if (exception_flags & ARM64_EXCEPTION_FLAG_LOWER_EL) {
+        ab_process_t *proc = get_current_process();
+        dprintf(CRITICAL, "\n[EXCEPTION] Terminating faulting EL0 process '%s' (koid=%lu) on CPU %u!\n",
+                proc ? proc->name : "unknown", proc ? proc->base.koid : 0UL, arch_curr_cpu_num());
+        dprintf(CRITICAL, "  ESR=0x%x (EC=0x%x, ISS=0x%x) FAR=%p\n",
+                esr, ec, iss, (void *)far);
+        dump_iframe(iframe);
+        arch_enable_ints();
+        ab_process_exit_current(-1);
+    }
+
+    dprintf(CRITICAL, "\n[PANIC] Unhandled EL1 Kernel Sync Exception on CPU %u!\n",
+            arch_curr_cpu_num());
     dprintf(CRITICAL, "  ESR=0x%x (EC=0x%x, ISS=0x%x) FAR=%p\n",
             esr, ec, iss, (void *)far);
     dump_iframe(iframe);

@@ -1,9 +1,9 @@
 /* =========================================================================
  * drivers/fs_srv.c - EL0 Multi-Client VirtIO-Blk & TAR Filesystem Server
  *
- * Lesson 18: Multiplexes 4 virtual terminal shell channels (tty0..tty3)
- * concurrently using a Zircon PortDispatcher (sys_port_create +
- * sys_object_wait_async + sys_port_wait).
+ * Lesson 20: Standalone BOOTFS system server linked at VA 0x20000000.
+ * Multiplexes 4 virtual terminal shell channels (tty0..tty3) concurrently
+ * using a Zircon PortDispatcher (sys_port_create + sys_object_wait_async).
  * ========================================================================= */
 #include "ulibc.h"
 
@@ -20,7 +20,13 @@
 #define VIRTIO_MMIO_INTERRUPT_STAT  0x060
 #define VIRTIO_MMIO_INTERRUPT_ACK   0x064
 #define VIRTIO_MMIO_STATUS          0x070
+#define VIRTIO_MMIO_CONFIG          0x100
 #define VIRTIO_RING_SIZE            16
+
+#define FS_DMA_TOTAL_PAGES          32U
+#define FS_DMA_META_PAGES           3U
+#define FS_TAR_CACHE_PAGES          (FS_DMA_TOTAL_PAGES - FS_DMA_META_PAGES)
+#define FS_TAR_CACHE_MAX_BYTES      (FS_TAR_CACHE_PAGES * PAGE_SIZE)
 
 typedef struct {
     uint64_t addr;
@@ -73,7 +79,7 @@ static uint32_t oct2uint(const char *oct, size_t len) {
 }
 
 static int handle_fs_request(ab_handle_t ch_h, const uint8_t *tar_cache,
-                             const fs_msg_t *req_msg) {
+                             size_t cache_bytes, const fs_msg_t *req_msg) {
     if (req_msg->op == FS_OP_LIST) {
         fs_msg_t rep;
         rep.op        = FS_OP_LIST;
@@ -82,7 +88,7 @@ static int handle_fs_request(ab_handle_t ch_h, const uint8_t *tar_cache,
         size_t out_pos = 0;
 
         size_t off = 0;
-        while (off + 512 <= 5 * PAGE_SIZE) {
+        while (off + 512 <= cache_bytes) {
             const tar_header_t *th = (const tar_header_t *)(tar_cache + off);
             if (th->name[0] == '\0') break;
             uint32_t fsz = oct2uint(th->size, 12);
@@ -91,8 +97,8 @@ static int handle_fs_request(ab_handle_t ch_h, const uint8_t *tar_cache,
             for (size_t i = 0; th->name[i] && out_pos + 1 < sizeof(rep.data); i++) {
                 rep.data[out_pos++] = th->name[i];
             }
-            rep.data[out_pos++] = '\n';
-            off += 512 + ((fsz + 511) & ~511U);
+            if (out_pos + 1 < sizeof(rep.data)) rep.data[out_pos++] = '\n';
+            off += 512 + ((fsz + 511U) & ~511U);
         }
         rep.data[out_pos] = '\0';
         sys_channel_write(ch_h, &rep, sizeof(rep), NULL, 0);
@@ -106,28 +112,29 @@ static int handle_fs_request(ab_handle_t ch_h, const uint8_t *tar_cache,
 
         ab_handle_t ro_file_vmo = AB_HANDLE_INVALID;
         size_t off = 0;
-        while (off + 512 <= 5 * PAGE_SIZE) {
+        while (off + 512 <= cache_bytes) {
             const tar_header_t *th = (const tar_header_t *)(tar_cache + off);
             if (th->name[0] == '\0') break;
             uint32_t fsz = oct2uint(th->size, 12);
             if (u_strcmp(th->name, req_msg->data) == 0 &&
-                off + 512 + fsz <= 5 * PAGE_SIZE) {
+                off + 512 + fsz <= cache_bytes) {
                 ab_handle_t rw_vmo = AB_HANDLE_INVALID;
-                uint64_t vmo_sz = (fsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+                uint64_t vmo_sz = ((uint64_t)fsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
                 if (vmo_sz == 0) vmo_sz = PAGE_SIZE;
-                sys_vmo_create(vmo_sz, 0, &rw_vmo);
-                sys_object_set_name(rw_vmo, th->name);
-                sys_vmo_write(rw_vmo, tar_cache + off + 512, 0, fsz);
-                sys_handle_duplicate(rw_vmo,
-                                    AB_RIGHT_READ | AB_RIGHT_WRITE | AB_RIGHT_MAP |
-                                    AB_RIGHT_EXECUTE | AB_RIGHT_TRANSFER | AB_RIGHT_INSPECT,
-                                    &ro_file_vmo);
-                sys_handle_close(rw_vmo);
-                rep.status    = 0;
-                rep.file_size = fsz;
+                if (sys_vmo_create(vmo_sz, 0, &rw_vmo) == AB_OK) {
+                    sys_object_set_name(rw_vmo, th->name);
+                    sys_vmo_write(rw_vmo, tar_cache + off + 512, 0, fsz);
+                    sys_handle_duplicate(rw_vmo,
+                                         AB_RIGHT_READ | AB_RIGHT_WRITE | AB_RIGHT_MAP |
+                                         AB_RIGHT_EXECUTE | AB_RIGHT_TRANSFER | AB_RIGHT_INSPECT,
+                                         &ro_file_vmo);
+                    sys_handle_close(rw_vmo);
+                    rep.status    = 0;
+                    rep.file_size = fsz;
+                }
                 break;
             }
-            off += 512 + ((fsz + 511) & ~511U);
+            off += 512 + ((fsz + 511U) & ~511U);
         }
 
         if (ro_file_vmo != AB_HANDLE_INVALID) {
@@ -153,14 +160,14 @@ int main(void) {
         fs_ch[i] = ulibc_get_startup_handle(3 + i);
     }
 
-    /* Map VirtIO MMIO and allocate 8-page Contiguous DMA VMO */
+    /* Map VirtIO MMIO and allocate 32-page (128KB) Contiguous DMA VMO */
     ab_handle_t mmio_vmo = 0;
     sys_vmo_create_physical(res_h, VIRTIO_MMIO_PHYS_BASE, 4 * PAGE_SIZE, &mmio_vmo);
     sys_object_set_name(mmio_vmo, "virtio-blk-mmio");
 
     vaddr_t mmio_uva = 0;
     sys_vmar_map(vmar_h, 0, mmio_vmo, 0, 4 * PAGE_SIZE,
-                AB_VM_PERM_READ | AB_VM_PERM_WRITE, &mmio_uva);
+                 AB_VM_PERM_READ | AB_VM_PERM_WRITE, &mmio_uva);
 
     vaddr_t dev_base = 0;
     uint32_t dev_irq = 0;
@@ -174,15 +181,32 @@ int main(void) {
         }
     }
 
+    if (dev_base == 0) {
+        ulog(log_h, "[fs-srv EL0] ERROR: No VirtIO-Blk device found!");
+        return -1;
+    }
+
+    uint64_t cap_lo = mmio_r32(dev_base, VIRTIO_MMIO_CONFIG);
+    uint64_t cap_hi = mmio_r32(dev_base, VIRTIO_MMIO_CONFIG + 4);
+    uint64_t disk_bytes = ((cap_hi << 32) | cap_lo) * 512ULL;
+    size_t cache_bytes = FS_TAR_CACHE_MAX_BYTES;
+    if (disk_bytes > 0 && disk_bytes < cache_bytes) {
+        cache_bytes = (size_t)disk_bytes;
+    }
+
     ab_handle_t irq_h = 0, dma_vmo = 0;
     paddr_t dma_pa = 0;
     sys_interrupt_create(res_h, dev_irq, &irq_h);
-    sys_vmo_create_contiguous(res_h, 8 * PAGE_SIZE, &dma_vmo, &dma_pa);
+    if (sys_vmo_create_contiguous(res_h, FS_DMA_TOTAL_PAGES * PAGE_SIZE,
+                                  &dma_vmo, &dma_pa) != AB_OK) {
+        ulog(log_h, "[fs-srv EL0] ERROR: Failed to allocate Contiguous DMA VMO!");
+        return -1;
+    }
     sys_object_set_name(dma_vmo, "virtio-blk-dma");
 
     vaddr_t dma_uva = 0;
-    sys_vmar_map(vmar_h, 0, dma_vmo, 0, 8 * PAGE_SIZE,
-                AB_VM_PERM_READ | AB_VM_PERM_WRITE, &dma_uva);
+    sys_vmar_map(vmar_h, 0, dma_vmo, 0, FS_DMA_TOTAL_PAGES * PAGE_SIZE,
+                 AB_VM_PERM_READ | AB_VM_PERM_WRITE, &dma_uva);
 
     mmio_w32(dev_base, VIRTIO_MMIO_STATUS, 0);
     mmio_w32(dev_base, VIRTIO_MMIO_STATUS, 1 | 2);
@@ -197,8 +221,8 @@ int main(void) {
     virtq_desc_t  *desc  = (virtq_desc_t *)dma_uva;
     virtq_avail_t *avail = (virtq_avail_t *)(dma_uva + VIRTIO_RING_SIZE * sizeof(virtq_desc_t));
     virtio_blk_req_t *req = (virtio_blk_req_t *)(dma_uva + 2 * PAGE_SIZE);
-    uint8_t *req_status   = (uint8_t *)(dma_uva + 2 * PAGE_SIZE + 64);
-    uint8_t *tar_cache    = (uint8_t *)(dma_uva + 3 * PAGE_SIZE);
+    volatile uint8_t *req_status = (volatile uint8_t *)(dma_uva + 2 * PAGE_SIZE + 64);
+    uint8_t *tar_cache    = (uint8_t *)(dma_uva + FS_DMA_META_PAGES * PAGE_SIZE);
 
     req->type     = 0;
     req->reserved = 0;
@@ -210,8 +234,8 @@ int main(void) {
     desc[0].flags = 1;
     desc[0].next  = 1;
 
-    desc[1].addr  = dma_pa + 3 * PAGE_SIZE;
-    desc[1].len   = 5 * PAGE_SIZE;
+    desc[1].addr  = dma_pa + FS_DMA_META_PAGES * PAGE_SIZE;
+    desc[1].len   = (uint32_t)cache_bytes;
     desc[1].flags = 1 | 2;
     desc[1].next  = 2;
 
@@ -230,7 +254,13 @@ int main(void) {
     mmio_w32(dev_base, VIRTIO_MMIO_INTERRUPT_ACK, mmio_r32(dev_base, VIRTIO_MMIO_INTERRUPT_STAT));
     sys_interrupt_ack(irq_h);
 
-    ulog(log_h, "[fs-srv EL0] Cached 40 TAR sectors via DMA! Multiplexing 4 VT channels on Port...");
+    if (*req_status != 0) {
+        ulog(log_h, "[fs-srv EL0] ERROR: VirtIO-Blk DMA read returned non-zero status!");
+        cache_bytes = 0;
+    } else {
+        dlog_printf("[fs-srv EL0] Cached %lu TAR sectors (%lu KB) via DMA! Multiplexing 4 VT channels on Port...",
+                    (unsigned long)(cache_bytes / 512), (unsigned long)(cache_bytes / 1024));
+    }
 
     ab_handle_t port_h = AB_HANDLE_INVALID;
     sys_port_create(0, &port_h);
@@ -253,7 +283,7 @@ int main(void) {
         fs_msg_t req_msg;
         while (sys_channel_read(fs_ch[idx], &req_msg, sizeof(req_msg),
                                 NULL, 0, &act_b, &act_h) == AB_OK) {
-            if (handle_fs_request(fs_ch[idx], tar_cache, &req_msg)) {
+            if (handle_fs_request(fs_ch[idx], tar_cache, cache_bytes, &req_msg)) {
                 running = 0;
                 break;
             }

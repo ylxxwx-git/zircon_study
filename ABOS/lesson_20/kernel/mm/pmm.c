@@ -172,6 +172,29 @@ void pmm_free_page(paddr_t paddr) {
     spin_lock_irqrestore(&pmm_lock, irqstate);
 }
 
+void pmm_free_wired_range(paddr_t start_pa, paddr_t end_pa) {
+    paddr_t s = start_pa & ~(PAGE_SIZE - 1);
+    paddr_t e = (end_pa + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (e <= s) return;
+
+    spin_lock_saved_state_t irqstate;
+    spin_lock_irqsave(&pmm_lock, &irqstate);
+    for (paddr_t pa = s; pa < e; pa += PAGE_SIZE) {
+        if (pa < arena_base) continue;
+        uint32_t idx = (uint32_t)((pa - arena_base) / PAGE_SIZE);
+        if (idx >= arena_num_pages) continue;
+        vm_page_t *page = &page_array[idx];
+        if (page->state == VM_PAGE_STATE_WIRED) {
+            page->state         = VM_PAGE_STATE_FREE;
+            page->pin_count     = 0;
+            page->next_free_idx = free_list_head;
+            free_list_head      = idx;
+            free_page_count++;
+        }
+    }
+    spin_lock_irqrestore(&pmm_lock, irqstate);
+}
+
 vm_page_t *pmm_paddr_to_page(paddr_t paddr) {
     if (paddr < arena_base) return NULL;
     uint32_t idx = (uint32_t)((paddr - arena_base) / PAGE_SIZE);

@@ -56,14 +56,16 @@ static void print_uint(uint64_t val, int base, int width, char pad) {
 static void print_int(int64_t val) {
     if (val < 0) {
         uart_putc('-');
-        print_uint((uint64_t)(-val), 10, 0, ' ');
+        print_uint(0ULL - (uint64_t)val, 10, 0, ' ');
     } else {
         print_uint((uint64_t)val, 10, 0, ' ');
     }
 }
 
 void dprintf(int level, const char *fmt, ...) {
-    (void)level;
+    if (level > KERNEL_LOG_LEVEL) {
+        return;
+    }
     va_list args;
     va_start(args, fmt);
 

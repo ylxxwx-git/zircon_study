@@ -154,7 +154,7 @@ typedef struct {
     uint32_t     generation;
 } ab_handle_entry_t;
 
-#define VMO_MAX_PAGES           64U
+#define VMO_MAX_PAGES           128U
 #define MAX_VMAR_MAPPINGS       16U
 #define MAX_THREADS_PER_PROCESS 8U
 #define MAX_PROCS_PER_JOB       16U
@@ -169,6 +169,7 @@ typedef struct {
     (AB_RIGHTS_BASIC | AB_RIGHT_READ | AB_RIGHT_WRITE | AB_RIGHT_MAP | AB_RIGHT_EXECUTE)
 
 struct ab_thread_dispatcher;
+struct ab_job_dispatcher;
 
 typedef struct ab_vmo_dispatcher {
     ab_object_t base;
@@ -199,8 +200,10 @@ typedef struct {
 typedef struct ab_process {
     ab_object_t                  base;
     char                         name[32];
+    struct ab_job_dispatcher    *parent_job;
     vm_aspace_t                 *aspace;
     spin_lock_t                  handle_lock;
+    spin_lock_t                  vmar_lock;
     ab_handle_entry_t            handles[MAX_HANDLES_PER_PROCESS];
     ab_vmar_mapping_t            mappings[MAX_VMAR_MAPPINGS];
     struct ab_thread_dispatcher *threads[MAX_THREADS_PER_PROCESS];
@@ -398,8 +401,10 @@ ab_status_t ab_vmar_map(ab_process_t *proc, ab_object_t *vmar_obj,
                         size_t vmar_offset, ab_object_t *vmo_obj,
                         uint64_t vmo_offset, size_t len, uint32_t vm_perms,
                         vaddr_t *out_va);
+ab_status_t ab_vmar_unmap(ab_process_t *proc, ab_object_t *vmar_obj,
+                          vaddr_t addr, size_t len);
 int         ab_process_handle_page_fault(ab_process_t *proc, vaddr_t fault_va,
-                                         int is_write);
+                                         int is_write, int is_exec);
 
 
 /* =========================================================================
@@ -570,6 +575,7 @@ typedef struct {
 } ab_process_get_maps_args_t;
 
 void        ab_job_add_process(ab_job_dispatcher_t *job, ab_process_t *proc);
+void        ab_job_remove_process(ab_process_t *proc);
 ab_status_t ab_object_set_name(ab_object_t *obj, const char *name, size_t len);
 ab_status_t ab_job_get_ps_info(ab_object_t *job_obj, ab_task_info_entry_t *out_entries,
                                uint32_t max_entries, uint32_t *actual_out);

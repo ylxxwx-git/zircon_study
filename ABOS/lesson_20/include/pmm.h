@@ -38,6 +38,7 @@ void pmm_init(paddr_t ram_base, uint64_t ram_size, paddr_t kernel_end_pa,
 vm_page_t *pmm_alloc_page(vm_page_state_t state, paddr_t *out_paddr);
 vm_page_t *pmm_alloc_contiguous(size_t count, vm_page_state_t state, paddr_t *out_paddr);
 void pmm_free_page(paddr_t paddr);
+void pmm_free_wired_range(paddr_t start_pa, paddr_t end_pa);
 vm_page_t *pmm_paddr_to_page(paddr_t paddr);
 uint64_t pmm_count_free_pages(void);
 uint64_t pmm_count_total_pages(void);

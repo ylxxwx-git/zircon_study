@@ -11,6 +11,10 @@
 #define INFO     1
 #define SPEW     2
 
+#ifndef KERNEL_LOG_LEVEL
+#define KERNEL_LOG_LEVEL INFO
+#endif
+
 void dlog_init_early(void);
 void uart_putc(char c);
 void uart_puts(const char *s);

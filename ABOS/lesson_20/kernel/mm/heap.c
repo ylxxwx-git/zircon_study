@@ -7,7 +7,7 @@
 #include "spinlock.h"
 #include "debuglog.h"
 
-#define HEAP_INITIAL_PAGES 64U /* 256KB initial kernel heap pool */
+#define HEAP_INITIAL_PAGES 128U /* 512KB initial kernel heap pool */
 #define HEAP_MAGIC         0xAB054EA9U
 
 typedef struct heap_block {

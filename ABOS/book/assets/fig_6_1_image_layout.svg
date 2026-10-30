@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 225" width="720" height="225">
+
+  <defs>
+    <filter id="sh" x="-4%" y="-4%" width="112%" height="116%">
+      <feDropShadow dx="2.5" dy="2.5" stdDeviation="1.2" flood-color="#9aa3ad" flood-opacity="0.65"/>
+    </filter>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .frame { fill: #ffffff; stroke: #111827; stroke-width: 1.5; }
+      .title { font-family: "Liberation Sans", Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #111827; }
+      .lbl   { font-family: "Liberation Serif", Georgia, serif; font-size: 12px; fill: #111827; }
+      .lbl-b { font-family: "Liberation Sans", Arial, sans-serif; font-size: 11.5px; font-weight: bold; fill: #111827; }
+      .mono  { font-family: "Liberation Mono", monospace; font-size: 10.5px; fill: #1f2937; }
+      .sub   { font-family: "Liberation Serif", Georgia, serif; font-size: 10.5px; fill: #374151; }
+      .box-green  { fill: #bbf7d0; stroke: #14532d; stroke-width: 1.4; filter: url(#sh); }
+      .box-blue   { fill: #bfdbfe; stroke: #1e3a8a; stroke-width: 1.4; filter: url(#sh); }
+      .box-amber  { fill: #fde68a; stroke: #78350f; stroke-width: 1.4; filter: url(#sh); }
+      .box-pink   { fill: #fbcfe8; stroke: #831843; stroke-width: 1.4; filter: url(#sh); }
+      .box-purple { fill: #e9d5ff; stroke: #4c1d95; stroke-width: 1.4; filter: url(#sh); }
+      .box-cyan   { fill: #bae6fd; stroke: #0c4a6e; stroke-width: 1.4; filter: url(#sh); }
+      .box-gray   { fill: #e5e7eb; stroke: #374151; stroke-width: 1.3; }
+      .dash-group { fill: #f8fafc; stroke: #334155; stroke-width: 1.2; stroke-dasharray: 5,4; }
+      .line  { stroke: #1f2937; stroke-width: 1.5; fill: none; marker-end: url(#arr); }
+      .bline { stroke: #1f2937; stroke-width: 1.5; fill: none; marker-start: url(#arr); marker-end: url(#arr); }
+      .dline { stroke: #475569; stroke-width: 1.3; stroke-dasharray: 4,3; fill: none; marker-end: url(#arr); }
+    </style>
+  </defs>
+
+  <rect x="2" y="2" width="716" height="221" class="frame"/>
+
+  <text x="360" y="25" text-anchor="middle" class="title">Distribution of ABOS Build Artifacts: kernel.img, bootfs.tar &amp; disk.img</text>
+
+  <text x="24" y="52" class="lbl-b">1. -kernel image/kernel.img (Loaded at PA 0x4008_0000):</text>
+  <rect x="24" y="60" width="120" height="34" class="box-amber"/>
+  <text x="84" y="81" text-anchor="middle" class="mono">.idmap (12 KB)</text>
+  <rect x="144" y="60" width="240" height="34" class="box-blue"/>
+  <text x="264" y="81" text-anchor="middle" class="mono">EL1 Kernel (.text/.rodata/.data)</text>
+  <rect x="384" y="60" width="150" height="34" class="box-purple"/>
+  <text x="459" y="81" text-anchor="middle" class="mono">Embedded userboot</text>
+  <rect x="534" y="60" width="160" height="34" class="box-gray"/>
+  <text x="614" y="81" text-anchor="middle" class="mono">.bss + Boot Stacks</text>
+
+  <text x="24" y="118" class="lbl-b">2. -initrd image/bootfs.tar (USTAR RAM Disk → BOOTFS VMO):</text>
+  <rect x="24" y="126" width="210" height="34" class="box-green"/>
+  <text x="129" y="147" text-anchor="middle" class="mono">console-srv.bin (@0x20000000)</text>
+  <rect x="234" y="126" width="210" height="34" class="box-pink"/>
+  <text x="339" y="147" text-anchor="middle" class="mono">fs-srv.bin (@0x20000000)</text>
+  <rect x="444" y="126" width="250" height="34" class="box-cyan"/>
+  <text x="569" y="147" text-anchor="middle" class="mono">shell.bin (@0x20000000)</text>
+
+  <text x="24" y="182" class="lbl-b">3. -drive image/disk.img (64 KB VirtIO-Blk USTAR Disk):</text>
+  <rect x="24" y="190" width="150" height="26" class="box-amber"/>
+  <text x="99" y="207" text-anchor="middle" class="mono">motd.txt</text>
+  <rect x="174" y="190" width="150" height="26" class="box-amber"/>
+  <text x="249" y="207" text-anchor="middle" class="mono">zircon.txt</text>
+  <rect x="324" y="190" width="210" height="26" class="box-green"/>
+  <text x="429" y="207" text-anchor="middle" class="mono">calc.bin (@0x20000000)</text>
+  <rect x="534" y="190" width="160" height="26" class="box-gray"/>
+  <text x="614" y="207" text-anchor="middle" class="sub">Zero-padded to 64 KB</text>
+
+</svg>

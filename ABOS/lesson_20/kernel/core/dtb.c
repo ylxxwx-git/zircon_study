@@ -59,54 +59,66 @@ int dtb_parse(uint64_t dtb_paddr, boot_info_t *out_info) {
     }
 
     out_info->dtb_size = be32_to_cpu(hdr->totalsize);
+    uint32_t dt_strings_sz = be32_to_cpu(hdr->size_dt_strings);
     uintptr_t struct_ptr   = dtb_va + be32_to_cpu(hdr->off_dt_struct);
     uintptr_t struct_end   = struct_ptr + be32_to_cpu(hdr->size_dt_struct);
     uintptr_t strings_base = dtb_va + be32_to_cpu(hdr->off_dt_strings);
 
+    int node_depth     = 0;
     int in_memory_node = 0;
     int in_chosen_node = 0;
 
-    while (struct_ptr < struct_end) {
+    while (struct_ptr + 4 <= struct_end) {
         uint32_t token = be32_to_cpu(*(const uint32_t *)struct_ptr);
         struct_ptr += 4;
 
         if (token == FDT_BEGIN_NODE) {
+            node_depth++;
             const char *name = (const char *)struct_ptr;
-            in_memory_node = str_starts_with(name, "memory");
-            in_chosen_node = str_starts_with(name, "chosen");
+            if (node_depth == 2) {
+                in_memory_node = str_starts_with(name, "memory");
+                in_chosen_node = str_starts_with(name, "chosen");
+            }
             uintptr_t len = 0;
-            while (name[len] != '\0') len++;
+            while (struct_ptr + len < struct_end && name[len] != '\0') len++;
             struct_ptr = align4(struct_ptr + len + 1);
         } else if (token == FDT_PROP) {
+            if (struct_ptr + 8 > struct_end) break;
             uint32_t len     = be32_to_cpu(*(const uint32_t *)struct_ptr);
             uint32_t nameoff = be32_to_cpu(*(const uint32_t *)(struct_ptr + 4));
             struct_ptr += 8;
+            if (struct_ptr + len > struct_end) break;
 
-            const uint32_t *cells = (const uint32_t *)struct_ptr;
-            const char *prop_name = (const char *)(strings_base + nameoff);
+            if (nameoff < dt_strings_sz && node_depth == 2) {
+                const uint32_t *cells = (const uint32_t *)struct_ptr;
+                const char *prop_name = (const char *)(strings_base + nameoff);
 
-            if (in_memory_node && str_eq(prop_name, "reg") && len >= 16) {
-                uint64_t base = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
-                uint64_t size = ((uint64_t)be32_to_cpu(cells[2]) << 32) | be32_to_cpu(cells[3]);
-                out_info->ram_base = base;
-                out_info->ram_size = size;
-            } else if (in_chosen_node && str_eq(prop_name, "linux,initrd-start")) {
-                if (len >= 8) {
-                    out_info->initrd_start = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
-                } else if (len == 4) {
-                    out_info->initrd_start = (uint64_t)be32_to_cpu(cells[0]);
-                }
-            } else if (in_chosen_node && str_eq(prop_name, "linux,initrd-end")) {
-                if (len >= 8) {
-                    out_info->initrd_end = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
-                } else if (len == 4) {
-                    out_info->initrd_end = (uint64_t)be32_to_cpu(cells[0]);
+                if (in_memory_node && str_eq(prop_name, "reg") && len >= 16) {
+                    uint64_t base = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
+                    uint64_t size = ((uint64_t)be32_to_cpu(cells[2]) << 32) | be32_to_cpu(cells[3]);
+                    out_info->ram_base = base;
+                    out_info->ram_size = size;
+                } else if (in_chosen_node && str_eq(prop_name, "linux,initrd-start")) {
+                    if (len >= 8) {
+                        out_info->initrd_start = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
+                    } else if (len == 4) {
+                        out_info->initrd_start = (uint64_t)be32_to_cpu(cells[0]);
+                    }
+                } else if (in_chosen_node && str_eq(prop_name, "linux,initrd-end")) {
+                    if (len >= 8) {
+                        out_info->initrd_end = ((uint64_t)be32_to_cpu(cells[0]) << 32) | be32_to_cpu(cells[1]);
+                    } else if (len == 4) {
+                        out_info->initrd_end = (uint64_t)be32_to_cpu(cells[0]);
+                    }
                 }
             }
             struct_ptr = align4(struct_ptr + len);
         } else if (token == FDT_END_NODE) {
-            in_memory_node = 0;
-            in_chosen_node = 0;
+            if (node_depth == 2) {
+                in_memory_node = 0;
+                in_chosen_node = 0;
+            }
+            if (node_depth > 0) node_depth--;
         } else if (token == FDT_NOP) {
             continue;
         } else if (token == FDT_END) {

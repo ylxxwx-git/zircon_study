@@ -1,8 +1,9 @@
 /* =========================================================================
  * user/shell/shell.c - EL0 Interactive Shell ('abos-shell')
  *
- * Lesson 17: Adds Zircon-style 'ps' and 'vmaps' commands for inspecting
- * the Job/Process/Thread hierarchy, per-process capability handle counts,
+ * Lesson 20: Standalone BOOTFS interactive shell linked at VA 0x20000000.
+ * Supports Zircon-style 'ps' and 'vmaps' commands for inspecting the
+ * Job/Process/Thread hierarchy, per-process capability handle counts,
  * and Virtual Memory Address Space / VMAR / VMO mappings.
  *
  * References:
@@ -327,9 +328,27 @@ int main(void) {
             sys_channel_read(fs_ch, &rep, sizeof(rep), &file_vmo_h, 1, &act_b, &act_h);
 
             if (rep.status == 0 && act_h == 1 && file_vmo_h != AB_HANDLE_INVALID) {
+                uint64_t map_sz = ((uint64_t)rep.file_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+                if (map_sz == 0) map_sz = PAGE_SIZE;
                 vaddr_t file_va = 0;
-                sys_vmar_map(vmar_h, 0, file_vmo_h, 0, PAGE_SIZE, AB_VM_PERM_READ, &file_va);
-                shell_print(con_ch, (const char *)file_va);
+                if (sys_vmar_map(vmar_h, 0, file_vmo_h, 0, map_sz,
+                                 AB_VM_PERM_READ, &file_va) == AB_OK) {
+                    const char *fdata = (const char *)file_va;
+                    uint32_t rem = rep.file_size;
+                    uint32_t pos = 0;
+                    char chunk[129];
+                    while (rem > 0) {
+                        uint32_t n = (rem > 128U) ? 128U : rem;
+                        memcpy(chunk, fdata + pos, n);
+                        chunk[n] = '\0';
+                        shell_print(con_ch, chunk);
+                        pos += n;
+                        rem -= n;
+                    }
+                    sys_vmar_unmap(vmar_h, file_va, map_sz);
+                } else {
+                    shell_print(con_ch, "cat: sys_vmar_map failed\n");
+                }
                 sys_handle_close(file_vmo_h);
             } else {
                 shell_print(con_ch, "cat: file not found in TAR archive\n");
@@ -355,20 +374,33 @@ int main(void) {
             /* 2. Create a new isolated EL0 Process & Root VMAR for 'calc.bin' */
             ab_handle_t calc_proc = 0, calc_vmar = 0, calc_thr = 0;
             const char *cname = "calc.bin";
-            sys_process_create(job_h, cname, &calc_proc, &calc_vmar);
+            if (sys_process_create(job_h, cname, &calc_proc, &calc_vmar) != AB_OK) {
+                sys_handle_close(bin_vmo_h);
+                shell_print(con_ch, "Error: failed to create calc.bin process!\n");
+                continue;
+            }
 
             /* 3. Map the 'calc.bin' VMO into calc_vmar at VA 0x20000000 (offset 0x10000000) */
             vaddr_t entry_va = 0;
-            uint64_t map_sz = (rep.file_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+            uint64_t map_sz = ((uint64_t)rep.file_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
             if (map_sz == 0) map_sz = PAGE_SIZE;
-            sys_vmar_map(calc_vmar, 0x10000000ULL, bin_vmo_h, 0, map_sz,
-                        AB_VM_PERM_READ | AB_VM_PERM_WRITE | AB_VM_PERM_EXECUTE,
-                        &entry_va);
+            ab_status_t mst = sys_vmar_map(calc_vmar, 0x10000000ULL, bin_vmo_h, 0, map_sz,
+                                           AB_VM_PERM_READ | AB_VM_PERM_WRITE | AB_VM_PERM_EXECUTE,
+                                           &entry_va);
             sys_handle_close(bin_vmo_h);
             sys_handle_close(calc_vmar);
+            if (mst != AB_OK) {
+                sys_handle_close(calc_proc);
+                shell_print(con_ch, "Error: failed to map calc.bin VMO!\n");
+                continue;
+            }
 
-            /* 4. Create initial thread and pass [dup_log, dup_con] over bootstrap Channel */
-            sys_thread_create(calc_proc, cname, &calc_thr);
+            /* 4. Create initial thread and pass [dup_log, dup_con] with AB_PA_* tags */
+            if (sys_thread_create(calc_proc, cname, &calc_thr) != AB_OK) {
+                sys_handle_close(calc_proc);
+                shell_print(con_ch, "Error: failed to create calc.bin thread!\n");
+                continue;
+            }
 
             ab_handle_t p_ch = 0, c_ch = 0, dup_log = 0, dup_con = 0;
             sys_channel_create(0, &p_ch, &c_ch);
@@ -376,15 +408,23 @@ int main(void) {
             sys_handle_duplicate(con_ch, AB_RIGHT_SAME_RIGHTS, &dup_con);
 
             ab_handle_t ch_handles[2] = { dup_log, dup_con };
-            uint32_t ctag = 0x43414C43U;
-            sys_channel_write(p_ch, &ctag, sizeof(ctag), ch_handles, 2);
+            ab_proc_args_t pargs;
+            memset(&pargs, 0, sizeof(pargs));
+            pargs.magic           = AB_PROC_ARGS_MAGIC;
+            pargs.handle_types[0] = AB_PA_LOG;
+            pargs.handle_types[1] = AB_PA_CONSOLE;
+            sys_channel_write(p_ch, &pargs, sizeof(pargs), ch_handles, 2);
             sys_handle_close(p_ch);
 
             /* 5. Start calc.bin at _start (0x20000000 in crt0.o) and wait for exit! */
-            sys_process_start(calc_proc, calc_thr, entry_va, 0, c_ch, 0);
-            sys_handle_close(calc_thr);
-
-            sys_object_wait_one(calc_proc, AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
+            if (sys_process_start(calc_proc, calc_thr, entry_va, 0, c_ch, 0) == AB_OK) {
+                sys_handle_close(calc_thr);
+                sys_object_wait_one(calc_proc, AB_SIGNAL_TASK_TERMINATED, AB_TIME_INFINITE, &obs);
+            } else {
+                sys_handle_close(c_ch);
+                sys_handle_close(calc_thr);
+                shell_print(con_ch, "Error: failed to start calc.bin!\n");
+            }
             sys_handle_close(calc_proc);
         } else if (u_strcmp(line, "exit") == 0) {
             shell_print(con_ch, "Shutting down ABOS user-space servers. Goodbye!\n");
